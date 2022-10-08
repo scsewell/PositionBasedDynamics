@@ -1,0 +1,16 @@
+{
+  "name": "com.scsewell.position-based-dynamics",
+  "displayName": "Position Based Dynamics",
+  "version": "0.1.0",
+  "unity": "2022.2",
+  "description": "A XPBD phsyics engine.",
+  "keywords": [
+    "physics",
+    "simulation"
+  ],
+  "category": "",
+  "dependencies": {
+    "com.unity.burst": "1.8.0",
+    "com.unity.collections": "2.1.0-exp.4"
+  }
+}

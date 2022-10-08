@@ -1,0 +1,18 @@
+{
+    "name": "Scsewell.PositionBasedDynamics.Editor",
+    "rootNamespace": "Scsewell.PositionBasedDynamics.Editor",
+    "references": [
+        "GUID:dcd80441905517b4d94062355954553a"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": true,
+    "overrideReferences": true,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
