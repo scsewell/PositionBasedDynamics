@@ -12,6 +12,8 @@ namespace Scsewell.PositionBasedDynamics.Core
     public class TestCloth : Cloth
     {
         [SerializeField]
+        Bounds m_bounds = new Bounds(Vector3.zero, Vector3.one);
+        [SerializeField]
         Material m_material;
         [SerializeField]
         Vector2Int m_resolution = new Vector2Int(30, 200);
@@ -71,8 +73,14 @@ namespace Scsewell.PositionBasedDynamics.Core
         }
 
         /// <inheritdoc />
-        protected override void GetCloth(out NativeSlice<ClothParticle> particles, out NativeSlice<Constraint> constraints)
+        protected override void GetCloth(
+            out Bounds bounds,
+            out NativeSlice<ClothParticle> particles,
+            out NativeSlice<DistanceConstraint> constraints
+        )
         {
+            bounds = m_bounds;
+            
             particles = new NativeArray<ClothParticle>(
                 m_resolution.x * m_resolution.y,
                 Allocator.Temp,
@@ -130,7 +138,7 @@ namespace Scsewell.PositionBasedDynamics.Core
                 [5] = m_bendingCompliance,
             };
             
-            var tempConstraints = new NativeArray<Constraint>(
+            var tempConstraints = new NativeArray<DistanceConstraint>(
                 particles.Length * constraintTypeCount,
                 Allocator.Temp,
                 NativeArrayOptions.UninitializedMemory
@@ -151,7 +159,7 @@ namespace Scsewell.PositionBasedDynamics.Core
                             var id0 = offset.x * m_resolution.y + offset.y;
                             var id1 = offset.z * m_resolution.y + offset.w;
                             
-                            tempConstraints[num++] = new Constraint
+                            tempConstraints[num++] = new DistanceConstraint
                             {
                                 index0 = id0,
                                 index1 = id1,
@@ -169,8 +177,6 @@ namespace Scsewell.PositionBasedDynamics.Core
         /// <inheritdoc />
         protected override void ClothUpdated(NativeSlice<float3> positions)
         {
-            return;
-            
             if (m_mesh != null)
             {
                 m_mesh.Clear();

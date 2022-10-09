@@ -3,7 +3,7 @@
     /// <summary>
     /// A constraint that attempts to maintain a set distance between a pair of particles. 
     /// </summary>
-    public struct Constraint
+    public struct DistanceConstraint
     {
         /// <summary>
         /// The index of the first constrained particle.

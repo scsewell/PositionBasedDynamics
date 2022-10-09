@@ -2,6 +2,7 @@
 
 using Unity.Burst;
 using Unity.Collections;
+using Unity.Collections.LowLevel.Unsafe;
 using Unity.Jobs;
 using Unity.Mathematics;
 
@@ -12,6 +13,12 @@ namespace Scsewell.PositionBasedDynamics.Core
     public abstract class Cloth : MonoBehaviour
     {
         const int k_maxBatchSize = 1024 * 16;
+
+        struct BoundsData
+        {
+            public float3 min;
+            public float3 size;
+        }
 
         [SerializeField, Range(1, 64)]
         int m_subStepCount = 10;
@@ -27,13 +34,14 @@ namespace Scsewell.PositionBasedDynamics.Core
         bool m_resourcesCreated;
         bool m_resourcesDirty;
         
-        NativeArray<float3> m_restPositions;
+        NativeArray<long> m_restPositions;
         NativeArray<float> m_inverseMasses;
-        NativeArray<float3> m_positions;
-        NativeArray<float3> m_prevPositions;
+        NativeArray<long> m_positions;
+        NativeArray<long> m_prevPositions;
         NativeArray<float3> m_velocities;
+        NativeArray<float3> m_unpackedPositions;
         
-        NativeArray<Constraint> m_constraints;
+        NativeArray<DistanceConstraint> m_constraints;
         
         NativeMultiHashMap<uint, int> m_cellToParticles;
         NativeMultiHashMap<int, int> m_collisionQueries;
@@ -44,6 +52,7 @@ namespace Scsewell.PositionBasedDynamics.Core
         SolveConstraintsJob m_solveConstraintsJob;
         SolveCollisionsJob m_solveCollisionsJob;
         UpdateParticleVelocitiesJob m_updateParticleVelocitiesJob;
+        UnpackPositionsJob m_unpackPositionsJob;
 
         public float Thickness
         {
@@ -104,9 +113,15 @@ namespace Scsewell.PositionBasedDynamics.Core
                 DisposeResources();
             }
 
-            GetCloth(out var particles, out var constraints);
+            GetCloth(out var bounds, out var particles, out var constraints);
+
+            var boundsData = new BoundsData
+            {
+                min = bounds.min,
+                size = bounds.size,
+            };
             
-            m_restPositions = new NativeArray<float3>(
+            m_restPositions = new NativeArray<long>(
                 particles.Length,
                 Allocator.Persistent,
                 NativeArrayOptions.UninitializedMemory
@@ -116,12 +131,12 @@ namespace Scsewell.PositionBasedDynamics.Core
                 Allocator.Persistent,
                 NativeArrayOptions.UninitializedMemory
             );
-            m_positions = new NativeArray<float3>(
+            m_positions = new NativeArray<long>(
                 particles.Length,
                 Allocator.Persistent,
                 NativeArrayOptions.UninitializedMemory
             );
-            m_prevPositions = new NativeArray<float3>(
+            m_prevPositions = new NativeArray<long>(
                 particles.Length,
                 Allocator.Persistent,
                 NativeArrayOptions.UninitializedMemory
@@ -130,18 +145,24 @@ namespace Scsewell.PositionBasedDynamics.Core
                 particles.Length,
                 Allocator.Persistent
             );
+            m_unpackedPositions = new NativeArray<float3>(
+                particles.Length,
+                Allocator.Persistent,
+                NativeArrayOptions.UninitializedMemory
+            );
 
             for (var i = 0; i < particles.Length; i++)
             {
                 var particle = particles[i];
+                var restPosition = PackPosition(particle.restPosition, boundsData);
                 
-                m_restPositions[i] = particle.restPosition;
-                m_positions[i] = particle.restPosition;
-                m_prevPositions[i] = particle.restPosition;
+                m_restPositions[i] = restPosition;
+                m_positions[i] = restPosition;
+                m_prevPositions[i] = restPosition;
                 m_inverseMasses[i] = particle.inverseMass;
             }
 
-            m_constraints = new NativeArray<Constraint>(
+            m_constraints = new NativeArray<DistanceConstraint>(
                 constraints.Length,
                 Allocator.Persistent,
                 NativeArrayOptions.UninitializedMemory
@@ -157,17 +178,20 @@ namespace Scsewell.PositionBasedDynamics.Core
             
             m_buildCellToParticlesJob = new BuildCellToParticlesJob
             {
+                bounds = boundsData,
                 positions = m_positions,
                 cellToParticles = m_cellToParticles.AsParallelWriter(),
             };
             m_computeCollisionQueriesJob = new ComputeCollisionQueriesJob
             {
+                bounds = boundsData,
                 positions = m_positions,
                 cellToParticles = m_cellToParticles,
                 collisionQueries = m_collisionQueries.AsParallelWriter(),
             };
             m_integrateParticlesJob = new IntegrateParticlesJob
             {
+                bounds = boundsData,
                 positions = m_positions,
                 inverseMasses = m_inverseMasses,
                 velocities = m_velocities,
@@ -175,12 +199,14 @@ namespace Scsewell.PositionBasedDynamics.Core
             };
             m_solveConstraintsJob = new SolveConstraintsJob
             {
+                bounds = boundsData,
                 inverseMasses = m_inverseMasses,
                 positions = m_positions,
                 constraints = m_constraints,
             };
             m_solveCollisionsJob = new SolveCollisionsJob
             {
+                bounds = boundsData,
                 inverseMasses = m_inverseMasses,
                 restPositions = m_restPositions,
                 positions = m_positions,
@@ -189,9 +215,16 @@ namespace Scsewell.PositionBasedDynamics.Core
             };
             m_updateParticleVelocitiesJob = new UpdateParticleVelocitiesJob
             {
+                bounds = boundsData,
                 positions = m_positions,
                 prevPositions = m_prevPositions,
                 velocities = m_velocities,
+            };
+            m_unpackPositionsJob = new UnpackPositionsJob
+            {
+                bounds = boundsData,
+                packedPositions = m_positions,
+                unpackedPositions = m_unpackedPositions,
             };
 
             m_resourcesCreated = true;
@@ -209,6 +242,7 @@ namespace Scsewell.PositionBasedDynamics.Core
             m_positions.Dispose();
             m_prevPositions.Dispose();
             m_velocities.Dispose();
+            m_unpackedPositions.Dispose();
             
             m_constraints.Dispose();
 
@@ -296,17 +330,28 @@ namespace Scsewell.PositionBasedDynamics.Core
                 integrateParticlesDependencies = updateParticleVelocitiesJob;
             }
             
-            integrateParticlesDependencies.Complete();
+            var unpackPositionsJob = m_unpackPositionsJob.ScheduleByRef(
+                m_positions.Length,
+                128,
+                integrateParticlesDependencies
+            );
             
-            ClothUpdated(m_positions);
+            unpackPositionsJob.Complete();
+            
+            ClothUpdated(m_unpackedPositions);
         }
 
         /// <summary>
-        /// Gets the cloth to be simulated.
+        /// Gets the parameters of the cloth to be simulated.
         /// </summary>
+        /// <param name="bounds">The bounds of the cloth simulation.</param>
         /// <param name="particles">The cloth particles.</param>
         /// <param name="constraints">The constraints used when simulating the cloth.</param>
-        protected abstract void GetCloth(out NativeSlice<ClothParticle> particles, out NativeSlice<Constraint> constraints);
+        protected abstract void GetCloth(
+            out Bounds bounds,
+            out NativeSlice<ClothParticle> particles,
+            out NativeSlice<DistanceConstraint> constraints
+        );
 
         /// <summary>
         /// Called after the cloth simulation has progressed.
@@ -317,17 +362,18 @@ namespace Scsewell.PositionBasedDynamics.Core
         [BurstCompile(DisableSafetyChecks = true, FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low)]
         struct BuildCellToParticlesJob : IJobParallelFor
         {
+            public BoundsData bounds;
             public float spacing;
             
             [ReadOnly, NoAlias]
-            public NativeArray<float3> positions;
+            public NativeArray<long> positions;
             
             [WriteOnly, NoAlias]
             public NativeMultiHashMap<uint, int>.ParallelWriter cellToParticles;
             
             public void Execute(int i)
             {
-                var position = positions[i];
+                var position = UnpackPosition(positions[i], bounds);
                 var cell = GetCell(position, spacing);
                 var hash = math.hash(cell);
                 cellToParticles.Add(hash, i);
@@ -337,11 +383,12 @@ namespace Scsewell.PositionBasedDynamics.Core
         [BurstCompile(DisableSafetyChecks = true, FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low)]
         struct ComputeCollisionQueriesJob : IJobParallelFor
         {
+            public BoundsData bounds;
             public float spacing;
             public float maxDistance;
             
             [ReadOnly, NoAlias]
-            public NativeArray<float3> positions;
+            public NativeArray<long> positions;
             [ReadOnly, NoAlias]
             public NativeMultiHashMap<uint, int> cellToParticles;
             
@@ -352,9 +399,9 @@ namespace Scsewell.PositionBasedDynamics.Core
             {
                 var maxDistance2 = maxDistance * maxDistance;
 
-                var position = positions[id0];
-                var minCell = GetCell(position - maxDistance, spacing);
-                var maxCell = GetCell(position + maxDistance, spacing);
+                var p0 = UnpackPosition(positions[id0], bounds);
+                var minCell = GetCell(p0 - maxDistance, spacing);
+                var maxCell = GetCell(p0 + maxDistance, spacing);
 
                 for (var xi = minCell.x; xi <= maxCell.x; xi++)
                 {
@@ -367,9 +414,9 @@ namespace Scsewell.PositionBasedDynamics.Core
 
                             foreach (var id1 in cellToParticles.GetValuesForKey(hash))
                             {
-                                var otherPosition = positions[id1];
+                                var p1 = UnpackPosition(positions[id1], bounds);
 
-                                if (math.distancesq(position, otherPosition) < maxDistance2)
+                                if (math.distancesq(p0, p1) < maxDistance2)
                                 {
                                     collisionQueries.Add(id0, id1);
                                 }
@@ -383,6 +430,7 @@ namespace Scsewell.PositionBasedDynamics.Core
         [BurstCompile(DisableSafetyChecks = true, FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low)]
         struct IntegrateParticlesJob : IJobParallelFor
         {
+            public BoundsData bounds;
             public float deltaTime;
             public float3 gravity;
             public float maxSpeed;
@@ -393,10 +441,11 @@ namespace Scsewell.PositionBasedDynamics.Core
             public NativeArray<float3> velocities;
 
             [NoAlias]
-            public NativeArray<float3> positions;
+            public NativeArray<long> positions;
+            
             
             [WriteOnly, NoAlias]
-            public NativeArray<float3> prevPositions;
+            public NativeArray<long> prevPositions;
             
             public void Execute(int i)
             {
@@ -404,35 +453,41 @@ namespace Scsewell.PositionBasedDynamics.Core
                 {
                     return;
                 }
+
+                var packedPos = positions[i];
                 
-                var position = positions[i];
+                
+                // TODO: MOVE THIS TO END OF LOOP
+                prevPositions[i] = packedPos;
+                
+                var position = UnpackPosition(packedPos, bounds);
                 var velocity = velocities[i] + (gravity * deltaTime);
-
-                prevPositions[i] = position;
-
                 var speed = math.length(velocity);
                 
                 if (speed > maxSpeed)
                 {
                     velocity *= maxSpeed / speed;
                 }
+
+                var newPosition = position + (velocity * deltaTime);
                 
-                positions[i] = position + (velocity * deltaTime);
+                positions[i] = PackPosition(newPosition, bounds);
             }
         }
 
         [BurstCompile(DisableSafetyChecks = true, FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low)]
         struct SolveConstraintsJob : IJobParallelFor
         {
+            public BoundsData bounds;
             public float deltaTime;
             
             [ReadOnly, NoAlias]
             public NativeArray<float> inverseMasses;
             [ReadOnly, NoAlias]
-            public NativeArray<Constraint> constraints;
+            public NativeArray<DistanceConstraint> constraints;
             
-            [NoAlias, NativeDisableParallelForRestriction]
-            public NativeArray<float3> positions;
+            [NativeDisableParallelForRestriction, NoAlias]
+            public NativeArray<long> positions;
 
             public void Execute(int i)
             {
@@ -448,51 +503,55 @@ namespace Scsewell.PositionBasedDynamics.Core
                     return;
                 }
 
-                var p0 = positions[constraint.index0];
-                var p1 = positions[constraint.index1];
-
-                while ()
+                while (true)
                 {
-                    
-                }
-                
-                var disp = p0 - p1;
-                var len = math.length(disp);
+                    var packedP0 = positions[constraint.index0];
+                    var packedP1 = positions[constraint.index1];
 
-                if (len == 0f)
-                {
-                    return;
-                }
-                
-                var dir = disp / len;
-                var c = len - constraint.restLength;
-                var alpha = constraint.compliance / (deltaTime * deltaTime);
-                var s = -c / (w + alpha);
-                
-                Interlocked.CompareExchange()
+                    var p0 = UnpackPosition(packedP0, bounds);
+                    var p1 = UnpackPosition(packedP1, bounds);
+
+                    var disp = p0 - p1;
+                    var len = math.length(disp);
+
+                    if (len == 0f)
+                    {
+                        return;
+                    }
+                 
+                    var dir = disp / len;
+                    var c = len - constraint.restLength;
+                    var alpha = constraint.compliance / (deltaTime * deltaTime);
+                    var s = -c / (w + alpha);
+                    var newP0 = p0 + (dir * (s * w0));
+                    var newP1 = p1 + (dir * (-s * w1));
                     
-                // should be atomic ideally... we can lose out on a constraint update
-                // positions[constraint.index0] = p0 + (dir * (s * w0));
-                // positions[constraint.index1] = p1 + (dir * (-s * w1));
+                    if (AtomicWrite(positions, constraint.index0, PackPosition(newP0, bounds), packedP0) && 
+                        AtomicWrite(positions, constraint.index1, PackPosition(newP1, bounds), packedP1))
+                    {
+                        return;
+                    }
+                }
             }
         }
         
         [BurstCompile(DisableSafetyChecks = true, FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low)]
         struct SolveCollisionsJob : IJobParallelFor
         {
+            public BoundsData bounds;
             public float thickness;
 
             [ReadOnly, NoAlias]
             public NativeArray<float> inverseMasses;
             [ReadOnly, NoAlias]
-            public NativeArray<float3> restPositions;
+            public NativeArray<long> restPositions;
             [ReadOnly, NoAlias]
-            public NativeArray<float3> prevPositions;
+            public NativeArray<long> prevPositions;
             [ReadOnly, NoAlias]
             public NativeMultiHashMap<int, int> collisionQueries;
 
-            [NoAlias, NativeDisableParallelForRestriction]
-            public NativeArray<float3> positions;
+            [NativeDisableParallelForRestriction, NoAlias]
+            public NativeArray<long> positions;
 
             public void Execute(int id0)
             {
@@ -510,51 +569,62 @@ namespace Scsewell.PositionBasedDynamics.Core
                         continue;
                     }
                     
-                    var p0 = positions[id0];
-                    var p1 = positions[id1];
-
-                    var disp = p1 - p0;
-                    var dist2 = math.lengthsq(disp);
-                    
-                    if (dist2 > thickness2 || dist2 == 0f)
+                    while (true)
                     {
-                        continue;
-                    }
+                        var packedP0 = positions[id0];
+                        var packedP1 = positions[id1];
 
-                    var r0 = restPositions[id0];
-                    var r1 = restPositions[id1];
+                        var p0 = UnpackPosition(packedP0, bounds);
+                        var p1 = UnpackPosition(packedP1, bounds);
 
-                    var restDist2 = math.distancesq(r0, r1);
+                        var disp = p1 - p0;
+                        var dist2 = math.lengthsq(disp);
                     
-                    if (restDist2 < dist2)
-                    {
-                        continue;
-                    }
+                        if (dist2 > thickness2 || dist2 == 0f)
+                        {
+                            continue;
+                        }
 
-                    var minDist = thickness;
+                        var r0 = restPositions[id0];
+                        var r1 = restPositions[id1];
+
+                        var restDist2 = math.distancesq(r0, r1);
                     
-                    if (restDist2 < thickness2)
-                    {
-                        minDist = math.sqrt(restDist2);
-                    }
+                        if (restDist2 < dist2)
+                        {
+                            continue;
+                        }
 
-                    // position correction
-                    var dist = math.sqrt(dist2);
-                    var pDelta = disp * (0.5f * (minDist - dist) / dist);
-
-                    p0 -= pDelta;
-                    p1 += pDelta;
-
-                    // velocity correction
-                    var v0 = p0 - prevPositions[id0];
-                    var v1 = p1 - prevPositions[id1];
-                    var vAvg = 0.5f * (v0 + v1);
-
-                    var friction = 0f;
+                        var minDist = thickness;
                     
-                    // should be atomic ideally... we can lose out on a constraint update
-                    positions[id0] = p0 + (friction * (vAvg - v0));
-                    positions[id1] = p1 + (friction * (vAvg - v1));
+                        if (restDist2 < thickness2)
+                        {
+                            minDist = math.sqrt(restDist2);
+                        }
+
+                        // position correction
+                        var dist = math.sqrt(dist2);
+                        var pDelta = disp * (0.5f * (minDist - dist) / dist);
+
+                        p0 -= pDelta;
+                        p1 += pDelta;
+
+                        // velocity correction
+                        var v0 = p0 - prevPositions[id0];
+                        var v1 = p1 - prevPositions[id1];
+                        var vAvg = 0.5f * (v0 + v1);
+
+                        var friction = 0f;
+                    
+                        var newP0 = p0 + (friction * (vAvg - v0));
+                        var newP1 = p1 + (friction * (vAvg - v1));
+                        
+                        if (AtomicWrite(positions, id0, PackPosition(newP0, bounds), packedP0) && 
+                            AtomicWrite(positions, id1, PackPosition(newP1, bounds), packedP1))
+                        {
+                            return;
+                        }
+                    }
                 }
             }
         }
@@ -562,20 +632,66 @@ namespace Scsewell.PositionBasedDynamics.Core
         [BurstCompile(DisableSafetyChecks = true, FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low)]
         struct UpdateParticleVelocitiesJob : IJobParallelFor
         {
+            public BoundsData bounds;
             public float deltaTime;
             
             [ReadOnly, NoAlias]
-            public NativeArray<float3> positions;
+            public NativeArray<long> positions;
             [ReadOnly, NoAlias]
-            public NativeArray<float3> prevPositions;
+            public NativeArray<long> prevPositions;
             
             [WriteOnly, NoAlias]
             public NativeArray<float3> velocities;
 
             public void Execute(int i)
             {
-                velocities[i] = (positions[i] - prevPositions[i]) / deltaTime;
+                var pos = UnpackPosition(positions[i], bounds);
+                var prevPos = UnpackPosition(prevPositions[i], bounds);
+                
+                velocities[i] = (pos - prevPos) / deltaTime;
             }
+        }
+        
+        [BurstCompile(DisableSafetyChecks = true, FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low)]
+        struct UnpackPositionsJob : IJobParallelFor
+        {
+            public BoundsData bounds;
+            
+            [ReadOnly, NoAlias]
+            public NativeArray<long> packedPositions;
+            
+            [WriteOnly, NoAlias]
+            public NativeArray<float3> unpackedPositions;
+
+            public void Execute(int i)
+            {
+                unpackedPositions[i] = UnpackPosition(packedPositions[i], bounds);
+            }
+        }
+        
+        static long PackPosition(float3 position, BoundsData boundsData)
+        {
+            var relativePosition = (position - boundsData.min) / boundsData.size;
+            var packed = math.int3(math.round(math.saturate(relativePosition) * 0x1FFFFF));
+
+            return ((long)packed.z << 42) | ((long)packed.y << 21) | (long)packed.x;
+        }
+
+        static float3 UnpackPosition(long packedPosition, BoundsData boundsData)
+        {
+            var unpacked = new float3(
+                ((packedPosition >> 0 ) & 0x1FFFFF),
+                ((packedPosition >> 21) & 0x1FFFFF),
+                ((packedPosition >> 42) & 0x1FFFFF)
+            ) / 0x1FFFFF;
+
+            return boundsData.min + unpacked * boundsData.size;
+        }
+
+        static unsafe bool AtomicWrite(NativeArray<long> array, int index, long value, long initialValue)
+        {
+            ref var ptr = ref UnsafeUtility.ArrayElementAsRef<long>(array.GetUnsafePtr(), index);
+            return initialValue == Interlocked.CompareExchange(ref ptr, value, initialValue);
         }
 
         static int3 GetCell(float3 position, float spacing)
