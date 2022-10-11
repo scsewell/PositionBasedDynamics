@@ -1,6 +1,4 @@
-﻿using System.Threading;
-
-using Unity.Burst;
+﻿using Unity.Burst;
 using Unity.Collections;
 using Unity.Jobs;
 using Unity.Mathematics;
@@ -11,8 +9,6 @@ namespace Scsewell.PositionBasedDynamics.Core
 {
     public abstract class Cloth : MonoBehaviour
     {
-        const int k_maxBatchSize = 1024 * 16;
-
         [SerializeField, Range(1, 64)]
         int m_subStepCount = 10;
         [SerializeField]
@@ -220,6 +216,7 @@ namespace Scsewell.PositionBasedDynamics.Core
 
         void Simulate()
         {
+            // this should be made into a fixed step
             var deltaTime = Time.deltaTime;
             
             var subStepDeltaTime = deltaTime / m_subStepCount;
@@ -451,11 +448,6 @@ namespace Scsewell.PositionBasedDynamics.Core
                 var p0 = positions[constraint.index0];
                 var p1 = positions[constraint.index1];
 
-                while ()
-                {
-                    
-                }
-                
                 var disp = p0 - p1;
                 var len = math.length(disp);
 
@@ -469,11 +461,9 @@ namespace Scsewell.PositionBasedDynamics.Core
                 var alpha = constraint.compliance / (deltaTime * deltaTime);
                 var s = -c / (w + alpha);
                 
-                Interlocked.CompareExchange()
-                    
                 // should be atomic ideally... we can lose out on a constraint update
-                // positions[constraint.index0] = p0 + (dir * (s * w0));
-                // positions[constraint.index1] = p1 + (dir * (-s * w1));
+                positions[constraint.index0] = p0 + (dir * (s * w0));
+                positions[constraint.index1] = p1 + (dir * (-s * w1));
             }
         }
         

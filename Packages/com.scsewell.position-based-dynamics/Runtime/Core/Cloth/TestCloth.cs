@@ -169,8 +169,6 @@ namespace Scsewell.PositionBasedDynamics.Core
         /// <inheritdoc />
         protected override void ClothUpdated(NativeSlice<float3> positions)
         {
-            return;
-            
             if (m_mesh != null)
             {
                 m_mesh.Clear();

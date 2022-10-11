@@ -158,7 +158,7 @@ MonoBehaviour:
   m_spacing: 0.01
   m_enableCollisions: 0
   m_material: {fileID: 2100000, guid: c5003f9233cdd084a951cb84d0c584f6, type: 2}
-  m_resolution: {x: 1000, y: 100}
+  m_resolution: {x: 40, y: 80}
   m_hang: 1
   m_stretchCompliance: 0
   m_shearCompliance: 0.001
@@ -357,7 +357,7 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 963194225}
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 1, z: -10}
+  m_LocalPosition: {x: 0, y: 1, z: -2}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
