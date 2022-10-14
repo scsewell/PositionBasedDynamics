@@ -1,6 +1,6 @@
 ﻿using Unity.Mathematics;
 
-namespace Scsewell.PositionBasedDynamics.Core
+namespace Scsewell.PositionBasedDynamics
 {
     /// <summary>
     /// A struct that defines a cloth particle that can be simulated.

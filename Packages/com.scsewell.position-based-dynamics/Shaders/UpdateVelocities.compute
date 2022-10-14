@@ -1,0 +1,26 @@
+﻿#include "HLSLSupport.cginc"
+#include "XpbdTypes.hlsl"
+
+#pragma kernel CSMain
+
+#define THREAD_GROUP_SIZE 128
+
+StructuredBuffer<float4> _Positions;
+
+RWStructuredBuffer<float4> _PrevPositions;
+RWStructuredBuffer<float4> _Velocities;
+
+[numthreads(THREAD_GROUP_SIZE, 1, 1)]
+void CSMain(uint tID : SV_DispatchThreadID, uint groupID : SV_GroupID)
+{
+    if (tID < _ParticleCount)
+    {
+        float3 position = _Positions[tID].xyz;
+        float3 prevPosition = _PrevPositions[tID].xyz;
+
+        float3 velocity = (position - prevPosition) / _SubStepDeltaTime;
+        
+        _Velocities[tID].xyz = velocity;
+        _PrevPositions[tID].xyz = position;
+    }
+}

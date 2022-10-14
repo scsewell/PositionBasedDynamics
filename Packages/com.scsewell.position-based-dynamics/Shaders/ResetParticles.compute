@@ -1,0 +1,47 @@
+﻿#include "HLSLSupport.cginc"
+#include "XpbdTypes.hlsl"
+
+#pragma kernel Reset
+#pragma kernel Copy
+
+#define THREAD_GROUP_SIZE 128
+
+uint _BaseIndex;
+uint _Count;
+
+StructuredBuffer<float4> _RestPositions;
+
+RWStructuredBuffer<float4> _OldPositions;
+RWStructuredBuffer<float4> _OldPrevPositions;
+RWStructuredBuffer<float4> _OldVelocities;
+
+RWStructuredBuffer<float4> _Positions;
+RWStructuredBuffer<float4> _PrevPositions;
+RWStructuredBuffer<float4> _Velocities;
+
+[numthreads(THREAD_GROUP_SIZE, 1, 1)]
+void Reset(uint tID : SV_DispatchThreadID, uint groupID : SV_GroupID)
+{
+    if (tID < _Count)
+    {
+        uint index = _BaseIndex + tID;
+        float3 restPosition = _RestPositions[index].xyz;
+        
+        _Positions[index].xyz = restPosition;
+        _PrevPositions[index].xyz = restPosition;
+        _Velocities[index].xyz = 0.0;
+    }
+}
+
+[numthreads(THREAD_GROUP_SIZE, 1, 1)]
+void Copy(uint tID : SV_DispatchThreadID, uint groupID : SV_GroupID)
+{
+    if (tID < _Count)
+    {
+        uint index = _BaseIndex + tID;
+        
+        _Positions[index].xyz = _OldPositions[index].xyz;
+        _PrevPositions[index].xyz = _OldPrevPositions[index].xyz;
+        _Velocities[index].xyz = _OldVelocities[index].xyz;
+    }
+}

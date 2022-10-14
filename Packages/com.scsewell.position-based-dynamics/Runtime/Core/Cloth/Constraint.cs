@@ -1,4 +1,4 @@
-﻿namespace Scsewell.PositionBasedDynamics.Core
+﻿namespace Scsewell.PositionBasedDynamics
 {
     /// <summary>
     /// A constraint that attempts to maintain a set distance between a pair of particles. 

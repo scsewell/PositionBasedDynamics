@@ -7,7 +7,7 @@ using Unity.Mathematics;
 using UnityEngine;
 using UnityEngine.Rendering;
 
-namespace Scsewell.PositionBasedDynamics.Core
+namespace Scsewell.PositionBasedDynamics
 {
     public class TestCloth : Cloth
     {

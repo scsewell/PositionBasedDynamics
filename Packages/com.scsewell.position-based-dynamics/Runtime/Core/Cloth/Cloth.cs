@@ -5,7 +5,7 @@ using Unity.Mathematics;
 
 using UnityEngine;
 
-namespace Scsewell.PositionBasedDynamics.Core
+namespace Scsewell.PositionBasedDynamics
 {
     public abstract class Cloth : MonoBehaviour
     {
