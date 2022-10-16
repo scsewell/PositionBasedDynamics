@@ -17,4 +17,36 @@ uint _ParticleCount;
 uint _DistanceConstraintCount;
 CBUFFER_END
 
+void AtomicAdd(StructuredBuffer<uint4> buffer, uint index, uint component, float newValue)
+{
+	uint v = asuint(newValue);
+	uint compareValue = 0;
+	uint originalValue;
+
+	[allow_uav_condition]
+	while (true)
+	{
+		InterlockedCompareExchange(buffer[index][component], compareValue, v, originalValue);
+
+		if (compareValue == originalValue)
+        {
+			break;
+		}
+
+		compareValue = originalValue;
+		v = asuint(newValue + asfloat(originalValue));
+	}
+}
+
+void AtomicAdd(StructuredBuffer<uint4> buffer, uint index, float3 newValue, uint seed)
+{
+    uint s0 = seed % 3;
+    uint s1 = (seed + 1) % 3;
+    uint s2 = (seed + 2) % 3;
+
+    AtomicAdd(buffer, index, s0, newValue[s0]);
+    AtomicAdd(buffer, index, s1, newValue[s1]);
+    AtomicAdd(buffer, index, s2, newValue[s2]);
+}
+
 #endif // XPBD_TYPES_INCLUDED

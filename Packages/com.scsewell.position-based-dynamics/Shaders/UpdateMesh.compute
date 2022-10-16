@@ -1,0 +1,44 @@
+﻿#include "HLSLSupport.cginc"
+#include "XpbdTypes.hlsl"
+
+#pragma kernel SumTriangleNormals
+#pragma kernel ComputeVertexNormals
+
+#define THREAD_GROUP_SIZE 128
+
+StructuredBuffer<uint> _TriangleIndices;
+StructuredBuffer<float4> _Positions;
+
+RWStructuredBuffer<uint4> _Normals;
+
+[numthreads(THREAD_GROUP_SIZE, 1, 1)]
+void ComputeNormals(uint tID : SV_DispatchThreadID, uint groupID : SV_GroupID)
+{
+    if (tID < _Count)
+    {
+        uint index0 = _TriangleIndices[(tID * 3)];
+        uint index1 = _TriangleIndices[(tID * 3) + 1];
+        uint index2 = _TriangleIndices[(tID * 3) + 2];
+
+        float3 p0 = _Positions[index0];
+        float3 p1 = _Positions[index1];
+        float3 p2 = _Positions[index2];
+
+        float3 normal = cross(p1 - p0, p2 - p0);
+        
+        uint seed = index0 + index1 + index2;
+
+        AtomicAdd(_Normals, index0, normal, seed);
+        AtomicAdd(_Normals, index1, normal, seed);
+        AtomicAdd(_Normals, index2, normal, seed);
+    }
+}
+
+[numthreads(THREAD_GROUP_SIZE, 1, 1)]
+void ComputeVertexNormals(uint tID : SV_DispatchThreadID, uint groupID : SV_GroupID)
+{
+    if (tID < _Count)
+    {
+        _Normals[tID] = asuint(normalize(asfloat(_Normals[tID])))
+    }
+}

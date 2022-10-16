@@ -127,7 +127,7 @@ namespace Scsewell.PositionBasedDynamics
         /// The maximum number of simulation substeps that can be run in a single step.
         /// </summary>
         /// <remarks>
-        /// Decreasing this value helps to prevent spending inordiate amounts of time simulating
+        /// Decreasing this value helps to prevent spending excessive amounts of time simulating
         /// steps with large delta times at the cost of accuracy.
         /// </remarks>
         public static int MaxSubStepsPerFrame
