@@ -49,6 +49,13 @@ namespace Scsewell.PositionBasedDynamics
             public int particleCount;
         }
         
+        static readonly VertexAttributeDescriptor[] k_vertexAttributes =
+        {
+            new VertexAttributeDescriptor(VertexAttribute.Position, VertexAttributeFormat.Float32, 3, 0),
+            new VertexAttributeDescriptor(VertexAttribute.Normal, VertexAttributeFormat.Float32, 3, 1),
+            new VertexAttributeDescriptor(VertexAttribute.TexCoord0, VertexAttributeFormat.Float32, 2, 2),
+        };
+
         // shader resources
         static bool s_resourcesInitialized;
         static XpbdResources s_resources;
@@ -56,36 +63,45 @@ namespace Scsewell.PositionBasedDynamics
         static ComputeShader s_integrateShader;
         static ComputeShader s_solveDistanceConstraintsShader;
         static ComputeShader s_updateVelocitiesShader;
+        static ComputeShader s_updateMeshShader;
         static KernelInfo s_resetParticlesKernel;
         static KernelInfo s_copyParticlesKernel;
         static KernelInfo s_integrateKernel;
         static KernelInfo s_solveDistanceConstraintsKernel;
         static KernelInfo s_updateVelocitiesKernel;
+        static KernelInfo s_sumTriangleNormalsKernel;
+        static KernelInfo s_computeVertexNormalsKernel;
         
         // command buffers
         static CommandBuffer s_subStepCmdBuffer;
         
         // constant buffers
         static NativeArray<SimulationPropertyBuffer> s_simulationProperties;
-        static ComputeBuffer s_simulationConstantBuffer;
+        static GraphicsBuffer s_simulationConstantBuffer;
         
         // buffers filled on the CPU with static data
-        static ComputeBuffer s_particleGroupIndicesBuffer;
-        static ComputeBuffer s_inverseMassesBuffer;
-        static ComputeBuffer s_restPositionsBuffer;
-        static ComputeBuffer s_distanceConstraintsBuffer;
+        static GraphicsBuffer s_particleGroupIndicesBuffer;
+        static GraphicsBuffer s_inverseMassesBuffer;
+        static GraphicsBuffer s_restPositionsBuffer;
+        static GraphicsBuffer s_distanceConstraintsBuffer;
         
         // buffers filled on the CPU with dynamic data
-        static ComputeBuffer s_gravityBuffer;
+        static GraphicsBuffer s_gravityBuffer;
         
         // buffers filled on the GPU
-        static ComputeBuffer s_positionsBuffer;
-        static ComputeBuffer s_prevPositionsBuffer;
-        static ComputeBuffer s_velocitiesBuffer;
+        static GraphicsBuffer s_positionsBuffer;
+        static GraphicsBuffer s_prevPositionsBuffer;
+        static GraphicsBuffer s_velocitiesBuffer;
+        
+        // the mesh used for rendering
+        static Mesh s_mesh;
+        static GraphicsBuffer s_meshPositionBuffer;
+        static GraphicsBuffer s_meshNormalBuffer;
         
         // managed state
         static int s_particleCount;
-        static int s_distanceConstraintCount;
+        static int s_indexCount;
+        static readonly List<(int offset, int count)> s_distanceConstraintGroups = new List<(int, int)>();
 
         static bool s_enabled;
         static DirtyFlags s_dirtyFlags;
@@ -300,6 +316,8 @@ namespace Scsewell.PositionBasedDynamics
             {
                 SimulateInternal(Time.deltaTime);
             }
+            
+            Render();
         }
         
         static void SimulateInternal(float deltaTime)
@@ -364,18 +382,24 @@ namespace Scsewell.PositionBasedDynamics
             
             if (s_dirtyFlags.Intersects(DirtyFlags.Gravity))
             {
+                var buffer = s_gravityBuffer.LockBufferForWrite<float4>(0, s_cloths.Count);
+                
+                for (var i = 0; i < s_cloths.Count; i++)
+                {
+                    buffer[i] = new float4(s_cloths[i].Gravity, 0f);
+                }
+                
+                s_gravityBuffer.UnlockBufferAfterWrite<float4>(s_cloths.Count);
+                
+                /*
                 var gravity = new NativeArray<float4>(
                     s_cloths.Count,
                     Allocator.Temp,
                     NativeArrayOptions.UninitializedMemory
                 );
             
-                for (var i = 0; i < s_cloths.Count; i++)
-                {
-                    gravity[i] = new float4(s_cloths[i].Gravity, 0f);
-                }
-
                 cmdBuffer.SetBufferData(s_gravityBuffer, gravity);
+                */
             }
             
             // execute the simulation kernels
@@ -385,7 +409,7 @@ namespace Scsewell.PositionBasedDynamics
                 _SubStepCount = (uint)subStepCount,
                 _SubStepDeltaTime = subStepDeltaTime,
                 _ParticleCount = (uint)s_particleCount,
-                _DistanceConstraintCount = (uint)s_distanceConstraintCount,
+                _IndexCount = (uint)s_indexCount,
             };
             
             cmdBuffer.SetBufferData(s_simulationConstantBuffer, s_simulationProperties);
@@ -519,22 +543,45 @@ namespace Scsewell.PositionBasedDynamics
             s_dirtyFlags = DirtyFlags.None;
         }
 
+        static void Render()
+        {
+            using var _ = new ProfilerScope($"{nameof(XpbdManager)}.{nameof(Render)}()");
+
+            for (var i = 0; i < s_cloths.Count; i++)
+            {
+                var cloth = s_cloths[i];
+                Graphics.DrawMesh(s_mesh, cloth.Transform, cloth.Material, 0, null, i);
+            }
+        }
+
         static void UpdateBuffers()
         {
             using var _ = new ProfilerScope($"{nameof(XpbdManager)}.{nameof(UpdateBuffers)}()");
 
             // find the required buffer sizes
             s_particleCount = 0;
-            s_distanceConstraintCount = 0;
+            s_indexCount = 0;
+            var distanceConstraintCount = 0;
 
             for (var i = 0; i < s_cloths.Count; i++)
             {
                 var cloth = s_cloths[i];
                 s_particleCount += cloth.ParticleCount;
-                s_distanceConstraintCount += cloth.ConstraintCount;
+                s_indexCount += cloth.IndexCount;
+                
+                for (var j = 0; j < cloth.ConstraintGroupCount; j++)
+                {
+                    distanceConstraintCount += cloth.GetConstraintGroupSize(j);
+                }
             }
             
             // get the buffer data
+            var subMeshes = new NativeArray<SubMeshDescriptor>(
+                s_cloths.Count,
+                Allocator.Temp,
+                NativeArrayOptions.UninitializedMemory
+            );
+            
             var particleGroupIndices = new NativeArray<uint>(
                 s_particleCount,
                 Allocator.Temp,
@@ -550,49 +597,109 @@ namespace Scsewell.PositionBasedDynamics
                 Allocator.Temp,
                 NativeArrayOptions.UninitializedMemory
             );
+            var uvs = new NativeArray<float2>(
+                s_particleCount,
+                Allocator.Temp,
+                NativeArrayOptions.UninitializedMemory
+            );
+            
             var distanceConstraints = new NativeArray<DistanceConstraint>(
-                s_distanceConstraintCount,
+                distanceConstraintCount,
+                Allocator.Temp,
+                NativeArrayOptions.UninitializedMemory
+            );
+            
+            var indices = new NativeArray<uint>(
+                s_indexCount,
                 Allocator.Temp,
                 NativeArrayOptions.UninitializedMemory
             );
 
-            var particleIndex = 0;
-            var constraintIndex = 0;
+            var currentParticle = 0;
+            var currentIndex = 0;
+            var maxConstraintGroupCount = 0;
+            var baseParticleOffsets = new NativeHashMap<int, int>(s_cloths.Count, Allocator.Temp);
 
             for (var i = 0; i < s_cloths.Count; i++)
             {
                 var cloth = s_cloths[i];
                 var clothParticles = cloth.GetParticles();
-                var clothConstraints = cloth.GetConstraints();
+                var clothIndices = cloth.GetIndices();
                 
-                var baseIndex = particleIndex;
+                var baseParticle = currentParticle;
+                var baseIndex = currentIndex;
 
+                baseParticleOffsets.Add(i, baseParticle);
+                
+                subMeshes[i] = new SubMeshDescriptor
+                {
+                    bounds = cloth.Bounds,
+                    topology = MeshTopology.Triangles,
+                    baseVertex = 0,
+                    firstVertex = baseParticle,
+                    vertexCount = clothParticles.Length,
+                    indexStart = baseIndex,
+                    indexCount = clothIndices.Length,
+                };
+                
                 for (var j = 0; j < clothParticles.Length; j++)
                 {
                     var particle = clothParticles[j];
 
-                    particleGroupIndices[particleIndex] = (uint)i;
-                    inverseMasses[particleIndex] = particle.inverseMass;
-                    restPositions[particleIndex] = new float4(particle.restPosition, 0f);
+                    particleGroupIndices[currentParticle] = (uint)i;
+                    inverseMasses[currentParticle] = particle.inverseMass;
+                    restPositions[currentParticle] = new float4(particle.restPosition, 0f);
+                    uvs[currentParticle] = particle.uv;
                     
-                    particleIndex++;
+                    currentParticle++;
                 }
-                for (var j = 0; j < clothConstraints.Length; j++)
+                for (var j = 0; j < clothIndices.Length; j++)
                 {
-                    var constraint = clothConstraints[j];
-                    
-                    distanceConstraints[constraintIndex] = new DistanceConstraint
-                    {
-                        index0 = baseIndex + constraint.index0,
-                        index1 = baseIndex + constraint.index1,
-                        restLength = constraint.restLength,
-                        compliance = constraint.compliance,
-                    };
-
-                    constraintIndex++;
+                    indices[currentIndex++] = (uint)baseParticle + clothIndices[j];
                 }
+
+                maxConstraintGroupCount = Mathf.Max(maxConstraintGroupCount, cloth.ConstraintGroupCount);
             }
             
+            var currentConstraint = 0;
+            s_distanceConstraintGroups.Clear();
+
+            for (var i = 0; i < maxConstraintGroupCount; i++)
+            {
+                var baseConstraint = currentConstraint;
+                
+                for (var j = 0; j < s_cloths.Count; j++)
+                {
+                    var cloth = s_cloths[j];
+
+                    if (i >= cloth.ConstraintGroupCount)
+                    {
+                        continue;
+                    }
+
+                    var constraints = cloth.GetConstraintGroup(i);
+                    var baseParticle = baseParticleOffsets[j];
+
+                    for (var k = 0; k < constraints.Length; k++)
+                    {
+                        var constraint = constraints[j];
+                        
+                        distanceConstraints[currentConstraint++] = new DistanceConstraint
+                        {
+                            index0 = baseParticle + constraint.index0,
+                            index1 = baseParticle + constraint.index1,
+                            restLength = constraint.restLength,
+                            compliance = constraint.compliance,
+                        };
+                    }
+                }
+
+                var constraintCount = currentConstraint - baseConstraint;
+                s_distanceConstraintGroups.Add((baseConstraint, constraintCount));
+            }
+
+            baseParticleOffsets.Dispose();
+
             // create compute buffers
             if (s_gravityBuffer == null || s_gravityBuffer.count < s_cloths.Count)
             {
@@ -600,11 +707,11 @@ namespace Scsewell.PositionBasedDynamics
                 
                 var count = Mathf.NextPowerOfTwo(s_cloths.Count);
             
-                s_gravityBuffer = new ComputeBuffer(
+                s_gravityBuffer = new GraphicsBuffer(
+                    GraphicsBuffer.Target.Structured,
+                    GraphicsBuffer.UsageFlags.LockBufferForWrite,
                     count,
-                    4 * sizeof(float),
-                    ComputeBufferType.Structured,
-                    ComputeBufferMode.Dynamic
+                    4 * sizeof(float)
                 )
                 {
                     name = $"{nameof(XpbdManager)}_Gravity",
@@ -619,27 +726,47 @@ namespace Scsewell.PositionBasedDynamics
                 
                 var count = Mathf.NextPowerOfTwo(s_particleCount);
             
-                s_particleGroupIndicesBuffer = new ComputeBuffer(count, sizeof(uint))
+                s_particleGroupIndicesBuffer = new GraphicsBuffer(
+                    GraphicsBuffer.Target.Structured,
+                    GraphicsBuffer.UsageFlags.None,
+                    count,
+                    sizeof(uint)
+                )
                 {
                     name = $"{nameof(XpbdManager)}_ParticleGroupIndices",
                 };
-                s_inverseMassesBuffer = new ComputeBuffer(count, sizeof(float))
+                s_inverseMassesBuffer = new GraphicsBuffer(
+                    GraphicsBuffer.Target.Structured,
+                    GraphicsBuffer.UsageFlags.None,
+                    count,
+                    sizeof(float)
+                )
                 {
                     name = $"{nameof(XpbdManager)}_InverseMasses",
                 };
-                s_restPositionsBuffer = new ComputeBuffer(count, 4 * sizeof(float))
+                s_restPositionsBuffer = new GraphicsBuffer(
+                    GraphicsBuffer.Target.Structured,
+                    GraphicsBuffer.UsageFlags.None,
+                    count,
+                    4 * sizeof(float)
+                )
                 {
                     name = $"{nameof(XpbdManager)}_RestPositions",
                 };
             }
             
-            if (s_distanceConstraintsBuffer == null || s_distanceConstraintsBuffer.count < s_distanceConstraintCount)
+            if (s_distanceConstraintsBuffer == null || s_distanceConstraintsBuffer.count < distanceConstraintCount)
             {
                 DisposeUtils.DisposeSafe(ref s_distanceConstraintsBuffer);
 
-                var count = Mathf.NextPowerOfTwo(s_distanceConstraintCount);
+                var count = Mathf.NextPowerOfTwo(distanceConstraintCount);
             
-                s_distanceConstraintsBuffer = new ComputeBuffer(count, DistanceConstraint.k_size)
+                s_distanceConstraintsBuffer = new GraphicsBuffer(
+                    GraphicsBuffer.Target.Structured,
+                    GraphicsBuffer.UsageFlags.None,
+                    count,
+                    DistanceConstraint.k_size
+                )
                 {
                     name = $"{nameof(XpbdManager)}_DistanceConstraints",
                 };
@@ -663,15 +790,30 @@ namespace Scsewell.PositionBasedDynamics
             
             var particleBuffersCount = Mathf.NextPowerOfTwo(s_particleCount);
             
-            s_positionsBuffer = new ComputeBuffer(particleBuffersCount, 4 * sizeof(float))
+            s_positionsBuffer = new GraphicsBuffer(
+                GraphicsBuffer.Target.Structured,
+                GraphicsBuffer.UsageFlags.None,
+                particleBuffersCount,
+                4 * sizeof(float)
+            )
             {
                 name = $"{nameof(XpbdManager)}_Positions",
             };
-            s_prevPositionsBuffer = new ComputeBuffer(particleBuffersCount, 4 * sizeof(float))
+            s_prevPositionsBuffer = new GraphicsBuffer(
+                GraphicsBuffer.Target.Structured,
+                GraphicsBuffer.UsageFlags.None,
+                particleBuffersCount,
+                4 * sizeof(float)
+            )
             {
                 name = $"{nameof(XpbdManager)}_PrevPositions",
             };
-            s_velocitiesBuffer = new ComputeBuffer(particleBuffersCount, 4 * sizeof(float))
+            s_velocitiesBuffer = new GraphicsBuffer(
+                GraphicsBuffer.Target.Structured,
+                GraphicsBuffer.UsageFlags.None,
+                particleBuffersCount,
+                4 * sizeof(float)
+            )
             {
                 name = $"{nameof(XpbdManager)}_Velocities",
             };
@@ -862,6 +1004,26 @@ namespace Scsewell.PositionBasedDynamics
 
             copies.Dispose();
             resets.Dispose();
+            
+            // configure the rendering mesh
+            DisposeUtils.DisposeSafe(ref s_meshPositionBuffer);
+            DisposeUtils.DisposeSafe(ref s_meshNormalBuffer);
+            
+            s_mesh.Clear();
+            s_mesh.vertexBufferTarget |= GraphicsBuffer.Target.Raw;
+            s_mesh.indexBufferTarget |= GraphicsBuffer.Target.Raw;
+            s_mesh.SetVertexBufferParams(s_particleCount, k_vertexAttributes);
+            s_mesh.SetIndexBufferParams(s_indexCount, IndexFormat.UInt32);
+
+            s_meshPositionBuffer = s_mesh.GetVertexBuffer(0);
+            s_meshNormalBuffer = s_mesh.GetVertexBuffer(1);
+            s_mesh.SetVertexBufferData(uvs, 0, 0, s_particleCount, 2);
+            s_mesh.SetIndexBufferData(indices, 0, 0, indices.Length, MeshUpdateFlags.DontValidateIndices);
+            s_mesh.SetSubMeshes(subMeshes, MeshUpdateFlags.DontRecalculateBounds);
+            
+            subMeshes.Dispose();
+            uvs.Dispose();
+            indices.Dispose();
         }
 
         static void ResetParticles(CommandBuffer cmdBuffer)
@@ -973,11 +1135,13 @@ namespace Scsewell.PositionBasedDynamics
             s_integrateShader = s_resources.Integrate;
             s_solveDistanceConstraintsShader = s_resources.SolveDistanceConstraints;
             s_updateVelocitiesShader = s_resources.UpdateVelocities;
+            s_updateMeshShader = s_resources.UpdateMesh;
 
             if (s_resetParticlesShader == null ||
                 s_integrateShader == null ||
                 s_solveDistanceConstraintsShader == null ||
-                s_updateVelocitiesShader == null
+                s_updateVelocitiesShader == null ||
+                s_updateMeshShader == null
             )
             {
                 Debug.LogError("Required compute shaders have not been assigned to the XPBD resources asset!");
@@ -985,11 +1149,13 @@ namespace Scsewell.PositionBasedDynamics
                 return false;
             }
 
-            if (!GraphicsUtils.TryGetKernel(s_resetParticlesShader, Kernels.ResetParticles.k_reset, out s_resetParticlesKernel) ||
-                !GraphicsUtils.TryGetKernel(s_resetParticlesShader, Kernels.ResetParticles.k_copy, out s_copyParticlesKernel) ||
-                !GraphicsUtils.TryGetKernel(s_integrateShader, Kernels.Integrate.k_main, out s_integrateKernel) ||
-                !GraphicsUtils.TryGetKernel(s_solveDistanceConstraintsShader, Kernels.SolveDistanceConstraints.k_main, out s_solveDistanceConstraintsKernel) ||
-                !GraphicsUtils.TryGetKernel(s_updateVelocitiesShader, Kernels.UpdateVelocities.k_main, out s_updateVelocitiesKernel)
+            if (!s_resetParticlesShader.TryGetKernel(Kernels.ResetParticles.k_reset, out s_resetParticlesKernel) ||
+                !s_resetParticlesShader.TryGetKernel(Kernels.ResetParticles.k_copy, out s_copyParticlesKernel) ||
+                !s_integrateShader.TryGetKernel(Kernels.Integrate.k_main, out s_integrateKernel) ||
+                !s_solveDistanceConstraintsShader.TryGetKernel(Kernels.SolveDistanceConstraints.k_main, out s_solveDistanceConstraintsKernel) ||
+                !s_updateVelocitiesShader.TryGetKernel(Kernels.UpdateVelocities.k_main, out s_updateVelocitiesKernel) ||
+                !s_updateMeshShader.TryGetKernel(Kernels.UpdateMesh.k_sumTriangleNormals, out s_sumTriangleNormalsKernel) ||
+                !s_updateMeshShader.TryGetKernel(Kernels.UpdateMesh.k_computeVertexNormals, out s_computeVertexNormalsKernel)
             )
             {
                 DisposeResources();
@@ -1009,13 +1175,20 @@ namespace Scsewell.PositionBasedDynamics
                 NativeArrayOptions.UninitializedMemory
             );
             
-            s_simulationConstantBuffer = new ComputeBuffer(
+            s_simulationConstantBuffer = new GraphicsBuffer(
+                GraphicsBuffer.Target.Constant,
+                GraphicsBuffer.UsageFlags.LockBufferForWrite,
                 s_simulationProperties.Length,
-                SimulationPropertyBuffer.k_size,
-                ComputeBufferType.Constant
+                SimulationPropertyBuffer.k_size
             )
             {
                 name = $"{nameof(XpbdManager)}_{nameof(SimulationPropertyBuffer)}",
+            };
+            
+            // create rendering mesh
+            s_mesh = new Mesh
+            {
+                name = $"{nameof(XpbdManager)}_ClothMesh",
             };
 
             s_resourcesInitialized = true;
@@ -1040,12 +1213,15 @@ namespace Scsewell.PositionBasedDynamics
             s_integrateShader = null;
             s_solveDistanceConstraintsShader = null;
             s_updateVelocitiesShader = null;
+            s_updateMeshShader = null;
 
             s_resetParticlesKernel = default;
             s_copyParticlesKernel = default;
             s_integrateKernel = default;
             s_solveDistanceConstraintsKernel = default;
             s_updateVelocitiesKernel = default;
+            s_sumTriangleNormalsKernel = default;
+            s_computeVertexNormalsKernel = default;
 
             // dispose command buffers
             DisposeUtils.DisposeSafe(ref s_subStepCmdBuffer);
@@ -1066,9 +1242,15 @@ namespace Scsewell.PositionBasedDynamics
             DisposeUtils.DisposeSafe(ref s_prevPositionsBuffer);
             DisposeUtils.DisposeSafe(ref s_velocitiesBuffer);
 
+            // dispose mesh
+            DisposeUtils.DestroySafe(ref s_mesh);
+            DisposeUtils.DisposeSafe(ref s_meshPositionBuffer);
+            DisposeUtils.DisposeSafe(ref s_meshNormalBuffer);
+            
             // clear managed state
             s_particleCount = 0;
-            s_distanceConstraintCount = 0;
+            s_indexCount = 0;
+            s_distanceConstraintGroups.Clear();
         }
 
         static void DisposeRegistrar()
@@ -1080,7 +1262,7 @@ namespace Scsewell.PositionBasedDynamics
         static bool IsSupported(out string reasons)
         {
             reasons = null;
-
+            
             if (!SystemInfo.supportsComputeShaders)
             {
                 reasons = (reasons ?? string.Empty) + "Compute shaders are not supported!\n";

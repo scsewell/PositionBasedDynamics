@@ -9,6 +9,23 @@ namespace Scsewell.PositionBasedDynamics
 {
     static class DisposeUtils
     {
+        public static void DestroySafe<T>(ref T instance) where T : UnityEngine.Object 
+        {
+            if (instance != null)
+            {
+                if (Application.isPlaying)
+                {
+                    UnityEngine.Object.Destroy(instance);
+                }
+                else
+                {
+                    UnityEngine.Object.DestroyImmediate(instance);
+                }
+                
+                instance = default;
+            }
+        }
+
         public static void DisposeSafe<T>(ref T instance) where T : IDisposable 
         {
             if (typeof(T).IsClass)
@@ -35,7 +52,7 @@ namespace Scsewell.PositionBasedDynamics
             }
         }
 
-        public static void DisposeSafe(ref ComputeBuffer buffer)
+        public static void DisposeSafe(ref GraphicsBuffer buffer)
         {
             if (buffer != null)
             {

@@ -3,7 +3,9 @@
 
 #pragma kernel CSMain
 
-#define THREAD_GROUP_SIZE 128
+#define THREAD_GROUP_SIZE 64
+
+uint _ConstraintCount;
 
 StructuredBuffer<DistanceConstraint> _Constraints;
 StructuredBuffer<float> _InverseMasses;
@@ -13,7 +15,7 @@ RWStructuredBuffer<float4> _Positions;
 [numthreads(THREAD_GROUP_SIZE, 1, 1)]
 void CSMain(uint tID : SV_DispatchThreadID, uint groupID : SV_GroupID)
 {
-    if (tID < _DistanceConstraintCount)
+    if (tID < _ConstraintCount)
     {
         DistanceConstraint constraint = _Constraints[tID];
     

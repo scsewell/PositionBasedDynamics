@@ -14,10 +14,10 @@ uint _SubStepCount;
 float _DeltaTime;
 float _SubStepDeltaTime;
 uint _ParticleCount;
-uint _DistanceConstraintCount;
+uint _IndexCount;
 CBUFFER_END
 
-void AtomicAdd(StructuredBuffer<uint4> buffer, uint index, uint component, float newValue)
+void AtomicAdd(RWStructuredBuffer<uint4> buffer, uint index, uint component, float newValue)
 {
 	uint v = asuint(newValue);
 	uint compareValue = 0;
@@ -38,7 +38,7 @@ void AtomicAdd(StructuredBuffer<uint4> buffer, uint index, uint component, float
 	}
 }
 
-void AtomicAdd(StructuredBuffer<uint4> buffer, uint index, float3 newValue, uint seed)
+void AtomicAdd(RWStructuredBuffer<uint4> buffer, uint index, float3 newValue, uint seed)
 {
     uint s0 = seed % 3;
     uint s1 = (seed + 1) % 3;

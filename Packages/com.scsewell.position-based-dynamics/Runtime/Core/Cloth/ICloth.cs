@@ -3,6 +3,8 @@
 using Unity.Collections;
 using Unity.Mathematics;
 
+using UnityEngine;
+
 namespace Scsewell.PositionBasedDynamics
 {
     /// <summary>
@@ -25,6 +27,11 @@ namespace Scsewell.PositionBasedDynamics
         /// The particle constraints were changed.
         /// </summary>
         Constraints = XpbdManager.DirtyFlags.UpdateBuffers,
+
+        /// <summary>
+        /// The simulation bounds were changed.
+        /// </summary>
+        Bounds = XpbdManager.DirtyFlags.UpdateBuffers,
 
         /// <summary>
         /// The gravity acceleration was changed.
@@ -53,36 +60,75 @@ namespace Scsewell.PositionBasedDynamics
         int ParticleCount { get; }
         
         /// <summary>
-        /// The number of constraints affecting the cloth.
+        /// The number of groups of independent constraints.
         /// </summary>
-        int ConstraintCount { get; }
+        int ConstraintGroupCount { get; }
+
+        /// <summary>
+        /// The number of mesh indices for the cloth.
+        /// </summary>
+        int IndexCount { get; }
+
+        /// <summary>
+        /// The bounds of the simulation.
+        /// </summary>
+        Bounds Bounds { get; }
 
         /// <summary>
         /// The gravity to apply to the cloth.
         /// </summary>
         float3 Gravity { get; }
 
-        // todo graph coloring, optionally provided, and calucalted if not
-        
+        /// <summary>
+        /// The transform of the cloth.
+        /// </summary>
+        Matrix4x4 Transform { get; }
+
+        /// <summary>
+        /// The material used to render the cloth.
+        /// </summary>
+        Material Material { get; }
+
         /// <summary>
         /// Gets the cloth particles to be simulated.
         /// </summary>
         /// <remarks>
         /// The particles are not validated automatically, it is up to the cloth
-        /// implementation to ensure the particles are valid.
+        /// implementation to ensure the data is valid.
         /// </remarks>
-        /// <returns>A slice containing the particles for the cloth instance.</returns>
+        /// <returns>A slice containing the cloth particles.</returns>
         NativeSlice<ClothParticle> GetParticles();
         
         /// <summary>
-        /// Gets the constraints affecting the cloth particles.
+        /// Gets the number of constraints in the specified group.
+        /// </summary>
+        /// <param name="groupIndex">The index of the constraint group.</param>
+        /// <returns>The number of constraints in the group.</returns>
+        int GetConstraintGroupSize(int groupIndex);
+
+        /// <summary>
+        /// Gets a group of constraints affecting the cloth particles.
         /// </summary>
         /// <remarks>
+        /// No two constraints in the same group may constrain the same particle. Use a
+        /// graph coloring algorithm or knowledge of the mesh topology to create the groups
+        /// efficiently. Performance is improved by using as few groups as possible.
         /// The constraints are not validated automatically, it is up to the cloth
-        /// implementation to ensure the constraints are valid.
+        /// implementation to ensure the data is valid.
         /// </remarks>
-        /// <returns>A slice containing the constraints for the cloth instance.</returns>
-        NativeSlice<DistanceConstraint> GetConstraints();
+        /// <param name="groupIndex">The index of the constraint group.</param>
+        /// <returns>A slice containing the constraints in the group.</returns>
+        NativeSlice<ClothConstraint> GetConstraintGroup(int groupIndex);
+
+        /// <summary>
+        /// Gets the mesh indices for the cloth.
+        /// </summary>
+        /// <remarks>
+        /// The indices are not validated automatically, it is up to the cloth
+        /// implementation to ensure the data is valid.
+        /// </remarks>
+        /// <returns>A slice containing the mesh indices.</returns>
+        NativeSlice<uint> GetIndices();
 
         /// <summary>
         /// Resets the dirty flags of the cloth.

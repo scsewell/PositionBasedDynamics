@@ -14,7 +14,7 @@ namespace Scsewell.PositionBasedDynamics
     
     static class GraphicsUtils
     {
-        public static bool TryGetKernel(ComputeShader shader, string name, out KernelInfo kernel)
+        public static bool TryGetKernel(this ComputeShader shader, string name, out KernelInfo kernel)
         {
             if (!shader.HasKernel(name))
             {

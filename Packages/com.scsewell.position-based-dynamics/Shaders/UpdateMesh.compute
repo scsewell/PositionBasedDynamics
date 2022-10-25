@@ -3,6 +3,7 @@
 
 #pragma kernel SumTriangleNormals
 #pragma kernel ComputeVertexNormals
+#pragma kernel UpdateMesh
 
 #define THREAD_GROUP_SIZE 128
 
@@ -11,10 +12,13 @@ StructuredBuffer<float4> _Positions;
 
 RWStructuredBuffer<uint4> _Normals;
 
+RWByteAddressBuffer _MeshPositions;
+RWByteAddressBuffer _MeshNormals;
+
 [numthreads(THREAD_GROUP_SIZE, 1, 1)]
-void ComputeNormals(uint tID : SV_DispatchThreadID, uint groupID : SV_GroupID)
+void SumTriangleNormals(uint tID : SV_DispatchThreadID, uint groupID : SV_GroupID)
 {
-    if (tID < _Count)
+    if (tID < _IndexCount)
     {
         uint index0 = _TriangleIndices[(tID * 3)];
         uint index1 = _TriangleIndices[(tID * 3) + 1];
@@ -37,8 +41,18 @@ void ComputeNormals(uint tID : SV_DispatchThreadID, uint groupID : SV_GroupID)
 [numthreads(THREAD_GROUP_SIZE, 1, 1)]
 void ComputeVertexNormals(uint tID : SV_DispatchThreadID, uint groupID : SV_GroupID)
 {
-    if (tID < _Count)
+    if (tID < _ParticleCount)
     {
-        _Normals[tID] = asuint(normalize(asfloat(_Normals[tID])))
+        _Normals[tID] = asuint(normalize(asfloat(_Normals[tID])));
+    }
+}
+
+[numthreads(THREAD_GROUP_SIZE, 1, 1)]
+void UpdateMesh(uint tID : SV_DispatchThreadID, uint groupID : SV_GroupID)
+{
+    if (tID < _ParticleCount)
+    {
+		_MeshPositions.Store3(tID, asuint(_Positions[tID]));
+        _MeshNormals.Store3(tID, asuint(_Normals[tID]));
     }
 }

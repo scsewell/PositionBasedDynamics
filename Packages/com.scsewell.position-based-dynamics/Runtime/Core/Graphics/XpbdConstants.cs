@@ -43,6 +43,8 @@ namespace Scsewell.PositionBasedDynamics
         {
             public static readonly int _ConstantBuffer = Shader.PropertyToID("SimulationPropertyBuffer");
             
+            public static readonly int _ConstraintCount = Shader.PropertyToID("_ConstraintCount");
+            
             public static readonly int _Constraints = Shader.PropertyToID("_Constraints");
             public static readonly int _InverseMasses = Shader.PropertyToID("_InverseMasses");
             public static readonly int _Positions = Shader.PropertyToID("_Positions");
@@ -55,6 +57,15 @@ namespace Scsewell.PositionBasedDynamics
             public static readonly int _Positions = Shader.PropertyToID("_Positions");
             public static readonly int _PrevPositions = Shader.PropertyToID("_PrevPositions");
             public static readonly int _Velocities = Shader.PropertyToID("_Velocities");
+        }
+
+        public static class UpdateMesh
+        {
+            public static readonly int _ConstantBuffer = Shader.PropertyToID("SimulationPropertyBuffer");
+
+            public static readonly int _TriangleIndices = Shader.PropertyToID("_TriangleIndices");
+            public static readonly int _Positions = Shader.PropertyToID("_Positions");
+            public static readonly int _Normals = Shader.PropertyToID("_Normals");
         }
     }
 
@@ -89,6 +100,12 @@ namespace Scsewell.PositionBasedDynamics
         public static class UpdateVelocities
         {
             public const string k_main = "CSMain";
+        }
+
+        public static class UpdateMesh
+        {
+            public const string k_sumTriangleNormals = "SumTriangleNormals";
+            public const string k_computeVertexNormals = "ComputeVertexNormals";
         }
     }
 }

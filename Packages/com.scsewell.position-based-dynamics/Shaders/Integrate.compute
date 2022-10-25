@@ -3,7 +3,7 @@
 
 #pragma kernel CSMain
 
-#define THREAD_GROUP_SIZE 128
+#define THREAD_GROUP_SIZE 64
 
 StructuredBuffer<uint> _ParticleGroupIndices;
 StructuredBuffer<float> _InverseMasses;
@@ -21,6 +21,9 @@ void CSMain(uint tID : SV_DispatchThreadID, uint groupID : SV_GroupID)
         {
             return;
         }
+
+		// TODO: instead do one kernel invocation per group and use uniform value to avoid
+		// memory dependency.
 
         uint particleGroupIndex = _ParticleGroupIndices[tID];
         float3 gravity = _Gravity[particleGroupIndex].xyz;
