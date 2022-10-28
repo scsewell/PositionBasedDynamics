@@ -153,15 +153,15 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   m_material: {fileID: 2100000, guid: c5003f9233cdd084a951cb84d0c584f6, type: 2}
-  m_resolution: {x: 30, y: 30}
+  m_resolution: {x: 36, y: 36}
   m_bounds:
     m_Center: {x: 0, y: 0, z: 0}
     m_Extent: {x: 0.5, y: 0.5, z: 0.5}
   m_spacing: 0.1
   m_hang: 1
   m_stretchCompliance: 0
-  m_shearCompliance: 0.1
-  m_bendingCompliance: 0.01
+  m_shearCompliance: 0.25
+  m_bendingCompliance: 0.25
   m_gravity: {x: 0, y: -9.81, z: 0}
   m_debug: 0
 --- !u!4 &358940751

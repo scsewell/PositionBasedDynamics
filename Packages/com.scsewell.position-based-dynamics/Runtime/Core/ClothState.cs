@@ -187,35 +187,71 @@ namespace Scsewell.PositionBasedDynamics
             Graphics.DrawMesh(m_mesh, Cloth.Transform, Cloth.Material, 0);
         }
 
-        unsafe void UpdateBuffers()
+        void UpdateBuffers()
         {
             using var _ = new ProfilerScope($"{nameof(ClothState)}.{nameof(UpdateBuffers)}()");
 
+            // clear all existing state 
+            m_cmdBuffer.Clear();
+
+            DisposeUtils.DisposeSafe(ref m_distanceConstraintsBuffer);
+            DisposeUtils.DisposeSafe(ref m_inverseMassesBuffer);
+            DisposeUtils.DisposeSafe(ref m_currentPositionsBuffer);
+            DisposeUtils.DisposeSafe(ref m_previousPositionsBuffer);
+            DisposeUtils.DisposeSafe(ref m_normalsBuffer);
+        
+            m_mesh.Clear();
+            DisposeUtils.DisposeSafe(ref m_meshPositionBuffer);
+            DisposeUtils.DisposeSafe(ref m_meshNormalBuffer);
+            
             // find the required buffer sizes
             m_particleCount = Mathf.Max(Cloth.ParticleCount, 0);
             m_indexCount = Mathf.Max(Cloth.IndexCount, 0);
 
+            if (m_particleCount == 0)
+            {
+                Debug.LogWarning($"Cloth \"{Cloth.Name}\" has no particles.");
+                return;
+            }
             if (m_particleCount > Constants.maxParticlesPerCloth)
             {
                 Debug.LogError($"Cloth \"{Cloth.Name}\" has {m_particleCount} particles, exceeding the limit of {Constants.maxParticlesPerCloth}.");
                 m_particleCount = Constants.maxParticlesPerCloth;
             }
             
-            var batchCount = Mathf.Max(Cloth.ConstraintBatchCount, 0);
+            var constraintBatchCount = Mathf.Max(Cloth.ConstraintBatchCount, 0);
             
-            if (batchCount > Constants.maxConstraintBatches)
+            if (constraintBatchCount == 0)
             {
-                Debug.LogError($"Cloth \"{Cloth.Name}\" has {batchCount} constraint batches, exceeding the limit of {Constants.maxConstraintBatches}.");
-                batchCount = Constants.maxConstraintBatches;
+                Debug.LogError($"Cloth \"{Cloth.Name}\" has no constraint batches.");
+                return;
+            }
+            if (constraintBatchCount > Constants.maxConstraintBatches)
+            {
+                Debug.LogError($"Cloth \"{Cloth.Name}\" has {constraintBatchCount} constraint batches, exceeding the limit of {Constants.maxConstraintBatches}.");
+                constraintBatchCount = Constants.maxConstraintBatches;
             }
 
             var distanceConstraintCount = 0;
 
-            for (var i = 0; i < batchCount; i++)
+            for (var i = 0; i < constraintBatchCount; i++)
             {
-                distanceConstraintCount += Mathf.Max(Cloth.GetConstraintBatchSize(i), 0);
+                var batchSize = Mathf.Max(Cloth.GetConstraintBatchSize(i), 0);
+                
+                if (batchSize == 0)
+                {
+                    Debug.LogWarning($"Cloth \"{Cloth.Name}\" has no constraints in batch {i}.");
+                }
+                
+                distanceConstraintCount += batchSize;
             }
             
+            if (distanceConstraintCount == 0)
+            {
+                Debug.LogError($"Cloth \"{Cloth.Name}\" has no constraints.");
+                return;
+            }
+
             // get the buffer data
             var inverseMasses = new NativeArray<float>(
                 m_particleCount,
@@ -240,7 +276,7 @@ namespace Scsewell.PositionBasedDynamics
             );
             
             var indices = new NativeArray<ushort>(
-                m_indexCount + 1, // pad the array as it must be multiple of 4 bytes
+                m_indexCount + 1, // pad the array so we don't overrun reading the last index
                 Allocator.Temp,
                 NativeArrayOptions.UninitializedMemory
             );
@@ -265,13 +301,14 @@ namespace Scsewell.PositionBasedDynamics
             {
                 _ParticleCount = (uint)m_particleCount,
                 _TriangleCount = (uint)(m_indexCount / 3),
+                _ConstraintBatchCount = (uint)constraintBatchCount,
                 _BoundsMin = Cloth.Bounds.min,
                 _BoundsMax = Cloth.Bounds.max,
             };
             
             var currentConstraint = 0;
 
-            for (var i = 0; i < batchCount; i++)
+            for (var i = 0; i < constraintBatchCount; i++)
             {
                 Cloth.GetConstraintBatch(i, out var constraints, out var compliance);
 
@@ -294,12 +331,6 @@ namespace Scsewell.PositionBasedDynamics
             m_staticPropertyBuffer.SetData(m_staticProperties);
             
             // create compute buffers
-            DisposeUtils.DisposeSafe(ref m_inverseMassesBuffer);
-            DisposeUtils.DisposeSafe(ref m_currentPositionsBuffer);
-            DisposeUtils.DisposeSafe(ref m_previousPositionsBuffer);
-            DisposeUtils.DisposeSafe(ref m_normalsBuffer);
-            DisposeUtils.DisposeSafe(ref m_distanceConstraintsBuffer);
-        
             m_inverseMassesBuffer = new GraphicsBuffer(
                 GraphicsBuffer.Target.Structured,
                 GraphicsBuffer.UsageFlags.None,
@@ -356,10 +387,6 @@ namespace Scsewell.PositionBasedDynamics
             distanceConstraints.Dispose();
             
             // configure the rendering mesh
-            DisposeUtils.DisposeSafe(ref m_meshPositionBuffer);
-            DisposeUtils.DisposeSafe(ref m_meshNormalBuffer);
-            
-            m_mesh.Clear();
             m_mesh.vertexBufferTarget |= GraphicsBuffer.Target.Raw;
             m_mesh.indexBufferTarget |= GraphicsBuffer.Target.Raw;
             m_mesh.SetVertexBufferParams(m_particleCount, k_vertexAttributes);
@@ -388,8 +415,6 @@ namespace Scsewell.PositionBasedDynamics
             indices.Dispose();
 
             // configure the command buffer
-            m_cmdBuffer.Clear();
-            
             m_cmdBuffer.SetComputeConstantBufferParam(
                 ClothManager.s_clothShader,
                 Properties.Cloth._SimulationPropertyBuffer,

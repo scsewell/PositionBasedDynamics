@@ -2,14 +2,26 @@
 #include "ClothCore.hlsl"
 
 //#pragma use_dxc
+//#pragma enable_d3d11_debug_symbols
+
 #pragma kernel CSMain
 
+// TODO: decrease size? would need to use global memory to share results,
+// or ensure groups are entirely separate chunks of verts/tris (how to handle overlap?)
 #define THREAD_GROUP_SIZE   1024
 #define SHARED_MEMORY_SIZE  32 * 1024
 
 //groupshared uint gs_Data[SHARED_MEMORY_SIZE];
 groupshared float3 gs_Data[SHARED_MEMORY_SIZE / 12];
 
+struct Particle
+{
+    float inverseMass;
+    float3 currentPosition;
+    float3 previousPosition;
+};
+
+/*
 struct CompressedPosition
 {
     uint2 packedData;
@@ -31,17 +43,11 @@ struct CompressedParticle
     uint previousPosition;
 };
 
-struct Particle
-{
-    float inverseMass;
-    float3 currentPosition;
-    float3 previousPosition;
-};
-
 Particle DecompressParticle(CompressedParticle compressedParticle)
 {
     
 }
+*/
 
 Particle LoadParticleGlobal(uint index)
 {
@@ -110,7 +116,8 @@ void SolveDistanceConstraints(uint threadID, uint localID, uint groupID)
     // affect the same particles. This avoids the need to write atomically.
     uint batchOffset = 0;
 
-    for (uint batch = 0; batch < MAX_CONSTRAINT_BATCHES; batch++)
+    //[unroll(MAX_CONSTRAINT_BATCHES)]
+    for (uint batch = 0; batch < _ConstraintBatchCount; batch++)
     {
         uint batchSize = _ConstraintBatchSize[batch].x;
         float compliance = _ConstraintBatchCompliance[batch].x;
@@ -168,30 +175,27 @@ void SumTriangleNormals(uint triangleIndex)
 
 void SumTriangleNormals()
 {
-    // for (uint i = 0; i < _TriangleCount; i += THREAD_GROUP_SIZE)
+    // uint trianglesPerThread = _TriangleCount / (THREAD_GROUP_SIZE * _ThreadGroupCount) 
+    //
+    // for (uint i = 0; i < _TriangleCount / ; i += THREAD_GROUP_SIZE)
     // {
-    //     
+    //     THREAD_GROUP_SIZE
     // }
 }
 
-void UpdateMesh(uint threadID)
+void UpdateMeshParticle(uint index, Particle particle)
 {
-    UNITY_UNROLL
-    for (uint p = 0; p < PARTICLES_PER_THREAD; p++)
-    {
-        uint index = (2 * threadID) + p;
-        uint byteAddress = 3 * 4 * index;
+    uint byteAddress = 3 * 4 * index;
 
-        // todo: use groupshared?
-        float3 position = index < _ParticleCount ? _CurrentPositions[index].xyz : 0;
-        float3 normalSum = index < _ParticleCount ? asfloat(_Normals[index]) : 0;
-        float3 normal = normalize(normalSum);
-        
-        if (index < _ParticleCount)
-        {
-            _MeshPositions.Store3(byteAddress, asuint(position));
-            _MeshNormals.Store3(byteAddress, asuint(normal));
-        }
+    // todo: use groupshared?
+    float3 position = particle.currentPosition;
+    float3 normalSum = index < _ParticleCount ? asfloat(_Normals[index]) : 0;
+    float3 normal = normalize(normalSum);
+    
+    if (index < _ParticleCount)
+    {
+        _MeshPositions.Store3(byteAddress, asuint(position));
+        _MeshNormals.Store3(byteAddress, asuint(normal));
     }
 }
 
@@ -230,10 +234,10 @@ void CSMain(uint threadID : SV_DispatchThreadID, uint localID : SV_GroupThreadID
     {
         uint index = (2 * threadID) + p;
         
-        StoreParticleGlobal(index, LoadParticleLocal(index));
+        Particle particle = LoadParticleLocal(index);
+        StoreParticleGlobal(index, particle);
+        UpdateMeshParticle(index, particle);
     }
     
     //SumTriangleNormals();
-    
-    UpdateMesh(threadID);
 }

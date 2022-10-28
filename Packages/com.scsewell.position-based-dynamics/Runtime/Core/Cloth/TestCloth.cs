@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 
 using Unity.Collections;
 using Unity.Mathematics;
@@ -9,34 +10,52 @@ namespace Scsewell.PositionBasedDynamics
 {
     class TestCloth : MonoBehaviour, ICloth
     {
-        const int k_constraintTypeCount = 4;
-        
-        static readonly int4[] k_constraintTypeOffsets =
+        [Flags]
+        public enum ConstraintTypes
         {
-            new int4(0, 0, 0, 1), // stretch
-            new int4(0, 0, 1, 0),
-            new int4(0, 0, 1, 1), // shear
-            new int4(0, 1, 1, 0),
-            new int4(0, 0, 0, 2), // bending
-            new int4(0, 0, 2, 0),
-        };
+            None = 0,
+            Stretch = 1 << 0,
+            Shear = 1 << 1,
+            Bending = 1 << 2,
+            All = ~0,
+        }
 
+        struct ConstraintBatch
+        {
+            public readonly ConstraintTypes type;
+            public readonly int4 offsets;
+            public readonly Func<int, int, bool> addToBatch;
+            public int size;
+
+            public ConstraintBatch(ConstraintTypes type, int4 offsets, Func<int, int, bool> addToBatch)
+            {
+                this.type = type;
+                this.offsets = offsets;
+                this.addToBatch = addToBatch;
+                size = 0;
+            }
+        }
+        
         [SerializeField]
         Material m_material;
-        [SerializeField]
-        Vector2Int m_resolution = new Vector2Int(44, 44);
-        [SerializeField]
-        Bounds m_bounds = new Bounds(Vector3.zero, Vector3.one);
+        [SerializeField, Range(5, 200)]
+        int m_resX = 30;
+        [SerializeField, Range(5, 200)]
+        int m_resY = 30;
         [SerializeField]
         float m_spacing = 0.01f;
         [SerializeField]
-        bool m_hang = true;
+        Bounds m_bounds = new Bounds(Vector3.zero, Vector3.one);
+        [SerializeField]
+        ConstraintTypes m_EnabledConstraints = ConstraintTypes.All;
         [SerializeField, Range(0, 1f)]
         float m_stretchCompliance = 0f;
         [SerializeField, Range(0, 1f)]
-        float m_shearCompliance = 0.001f;
+        float m_shearCompliance = 0.25f;
         [SerializeField, Range(0, 1f)]
-        float m_bendingCompliance = 1f;
+        float m_bendingCompliance = 0.25f;
+        [SerializeField]
+        bool m_hang = true;
         [SerializeField]
         Vector3 m_gravity = new Vector3(0, -9.81f, 0);
         [SerializeField]
@@ -48,8 +67,7 @@ namespace Scsewell.PositionBasedDynamics
         NativeArray<ClothParticle> m_particles;
         NativeArray<ClothConstraint> m_constraints;
         NativeArray<uint> m_indices;
-        int[] m_constraintBatchSizes;
-        int m_indexCount;
+        readonly List<ConstraintBatch> m_constraintBatches = new List<ConstraintBatch>();
 
         /// <inheritdoc />
         public string Name => name;
@@ -58,10 +76,10 @@ namespace Scsewell.PositionBasedDynamics
         public int ParticleCount => m_particles.Length;
 
         /// <inheritdoc />
-        public int IndexCount => m_indexCount;
+        public int IndexCount => m_indices.Length;
 
         /// <inheritdoc />
-        public int ConstraintBatchCount => m_constraintBatchSizes.Length;
+        public int ConstraintBatchCount => m_constraintBatches.Count;
 
         /// <inheritdoc />
         public Bounds Bounds => m_bounds;
@@ -106,47 +124,61 @@ namespace Scsewell.PositionBasedDynamics
             }
         }
 
-        void OnDrawGizmosSelected()
+        /// <inheritdoc />
+        public NativeSlice<ClothParticle> GetParticles()
         {
-            if (m_resourcesCreated && m_debug)
-            {
-                for (var i = 0; i < ConstraintBatchCount; i++)
-                {
-                    var color = Color.HSVToRGB((float)i / ConstraintBatchCount, 1f, 1f);
-                
-                    GetConstraintBatch(i, out var constraints, out _);
+            return m_particles.Slice();
+        }
 
-                    for (var j = 0; j < constraints.Length; j++)
-                    {
-                        var constraint = constraints[j];
-                        var p0 = m_particles[constraint.index0];
-                        var p1 = m_particles[constraint.index1];
-                    
-                        Debug.DrawLine(p0.restPosition, p1.restPosition, color);
-                    }
-                }
-            }
+        /// <inheritdoc />
+        public NativeSlice<uint> GetIndices()
+        {
+            return m_indices.Slice();
+        }
+
+        /// <inheritdoc />
+        public int GetConstraintBatchSize(int batchIndex)
+        {
+            return m_constraintBatches[batchIndex].size;
+        }
+
+        /// <inheritdoc />
+        public void GetConstraintBatch(int batchIndex, out NativeSlice<ClothConstraint> constraints, out float compliance)
+        {
+            var batch = m_constraintBatches[batchIndex];
+            
+            constraints = m_constraints.Slice(batchIndex * (m_particles.Length / 2), batch.size);
+            
+            // use an exponent to remap the compliance into a more intuitive range
+            compliance = Mathf.Pow(batch.type switch
+            {
+                ConstraintTypes.Stretch => m_stretchCompliance,
+                ConstraintTypes.Shear => m_shearCompliance,
+                ConstraintTypes.Bending => m_bendingCompliance,
+                _ => 0f,
+            }, 4);
         }
 
         void CreateResources()
         {
             DisposeResources();
 
+            // create particles
             m_particles = new NativeArray<ClothParticle>(
-                m_resolution.x * m_resolution.y,
+                m_resX * m_resY,
                 Allocator.Persistent,
                 NativeArrayOptions.UninitializedMemory
             );
             
-            for (var i = 0; i < m_resolution.x; i++)
+            for (var i = 0; i < m_resX; i++)
             {
-                for (var j = 0; j < m_resolution.y; j++)
+                for (var j = 0; j < m_resY; j++)
                 {
-                    var id = i * m_resolution.y + j;
+                    var id = i * m_resY + j;
 
                     var position = new Vector3(
-                        m_spacing * (-0.5f * m_resolution.x + i),
-                        m_spacing * (-0.5f * m_resolution.y + j),
+                        m_spacing * (-0.5f * (m_resX - 1) + i),
+                        m_spacing * (-0.5f * (m_resY - 1) + j),
                         0f
                     );
                     position += 0.001f * UnityEngine.Random.insideUnitSphere;
@@ -154,47 +186,72 @@ namespace Scsewell.PositionBasedDynamics
                     m_particles[id] = new ClothParticle
                     {
                         restPosition = position,
-                        inverseMass = (m_hang && j == (m_resolution.y - 1) && (i == 0 || i == m_resolution.x - 1)) ? 0f : 1f,
+                        inverseMass = (m_hang && j == (m_resY - 1) && (i == 0 || i == m_resX - 1)) ? 0f : 1f,
                     };
                 }
             }
 
-            var batchCount = 2 * k_constraintTypeCount;
-            m_constraintBatchSizes = new int[batchCount];
+            // create constraints
+            m_constraintBatches.Clear();
+            
+            if (m_EnabledConstraints.Intersects(ConstraintTypes.Stretch))
+            {
+                m_constraintBatches.Add(new(ConstraintTypes.Stretch, new int4(0, 0, 0, 1), (_, j) => j % 2 == 0));
+                m_constraintBatches.Add(new(ConstraintTypes.Stretch, new int4(0, 0, 0, 1), (_, j) => j % 2 == 1));
+                m_constraintBatches.Add(new(ConstraintTypes.Stretch, new int4(0, 0, 1, 0), (i, _) => i % 2 == 0));
+                m_constraintBatches.Add(new(ConstraintTypes.Stretch, new int4(0, 0, 1, 0), (i, _) => i % 2 == 1));
+            }
+            if (m_EnabledConstraints.Intersects(ConstraintTypes.Shear))
+            {
+                m_constraintBatches.Add(new(ConstraintTypes.Shear, new int4(0, 0, 1, 1), (i, _) => i % 2 == 0));
+                m_constraintBatches.Add(new(ConstraintTypes.Shear, new int4(0, 0, 1, 1), (i, _) => i % 2 == 1));
+                m_constraintBatches.Add(new(ConstraintTypes.Shear, new int4(0, 1, 1, 0), (i, _) => i % 2 == 0));
+                m_constraintBatches.Add(new(ConstraintTypes.Shear, new int4(0, 1, 1, 0), (i, _) => i % 2 == 1));
+            }
+            if (m_EnabledConstraints.Intersects(ConstraintTypes.Bending))
+            {
+                m_constraintBatches.Add(new(ConstraintTypes.Bending, new int4(0, 0, 0, 2), (_, j) => j % 4 < 2));
+                m_constraintBatches.Add(new(ConstraintTypes.Bending, new int4(0, 0, 0, 2), (_, j) => j % 4 >= 2));
+                m_constraintBatches.Add(new(ConstraintTypes.Bending, new int4(0, 0, 2, 0), (i, _) => i % 4 < 2));
+                m_constraintBatches.Add(new(ConstraintTypes.Bending, new int4(0, 0, 2, 0), (i, _) => i % 4 >= 2));
+            }
+
+            var maxConstraintsPerBatch = m_particles.Length / 2;
             
             m_constraints = new NativeArray<ClothConstraint>(
-                batchCount * m_particles.Length,
+                maxConstraintsPerBatch * m_constraintBatches.Count,
                 Allocator.Persistent,
                 NativeArrayOptions.UninitializedMemory
             );
 
-            for (var type = 0; type < k_constraintTypeCount; type++)
+            for (var b = 0; b < m_constraintBatches.Count; b++)
             {
-                for (var i = 0; i < m_resolution.x; i++)
+                var batch = m_constraintBatches[b];
+                
+                for (var i = 0; i < m_resX; i++)
                 {
-                    for (var j = 0; j < m_resolution.y; j++)
+                    for (var j = 0; j < m_resY; j++)
                     {
-                        var offset = k_constraintTypeOffsets[type] + new int4(i, j, i, j);
-
-                        if (offset.x >= m_resolution.x ||
-                            offset.y >= m_resolution.y ||
-                            offset.z >= m_resolution.x ||
-                            offset.w >= m_resolution.y)
+                        if (!batch.addToBatch(i, j))
                         {
                             continue;
                         }
                         
-                        var id0 = offset.x * m_resolution.y + offset.y;
-                        var id1 = offset.z * m_resolution.y + offset.w;
+                        var offset = new int4(i, j, i, j) + batch.offsets;
 
-                        var batchIndex = (2 * type) + type switch
+                        if (offset.x >= m_resX ||
+                            offset.y >= m_resY ||
+                            offset.z >= m_resX ||
+                            offset.w >= m_resY)
                         {
-                            0 => j % 2,
-                            _ => i % 2,
-                        };
-                        var batchSize = m_constraintBatchSizes[batchIndex]++;
-                        var constraintIndex = (m_particles.Length * batchIndex) + batchSize;
+                            continue;
+                        }
+
+                        var id0 = offset.x * m_resY + offset.y;
+                        var id1 = offset.z * m_resY + offset.w;
                         
+                        var constraintIndex = (maxConstraintsPerBatch * b) + batch.size;
+
                         m_constraints[constraintIndex] = new ClothConstraint
                         {
                             index0 = id0,
@@ -204,30 +261,38 @@ namespace Scsewell.PositionBasedDynamics
                                 m_particles[id1].restPosition
                             ),
                         };
+
+                        batch.size++;
                     }
                 }
+
+                m_constraintBatches[b] = batch;
             }
             
+            // create indices
             m_indices = new NativeArray<uint>(
-                m_resolution.x * m_resolution.y * 6,
+                6 * (m_resX - 1) * (m_resY - 1),
                 Allocator.Persistent,
                 NativeArrayOptions.UninitializedMemory
             );
 
-            m_indexCount = 0;
-            
-            for (var i = 0; i < m_resolution.x - 1; i++)
+            for (var i = 0; i < m_resX - 1; i++)
             {
-                for (var j = 0; j < m_resolution.y - 1; j++)
+                for (var j = 0; j < m_resY - 1; j++)
                 {
-                    var id = i * m_resolution.y + j;
+                    var id0 = (i + 0) * m_resY + (j + 0);
+                    var id1 = (i + 0) * m_resY + (j + 1);
+                    var id2 = (i + 1) * m_resY + (j + 1);
+                    var id3 = (i + 1) * m_resY + (j + 0);
+
+                    var index = 6 * ((i * (m_resY - 1)) + j);
                     
-                    m_indices[m_indexCount++] = (uint)(id + 1);
-                    m_indices[m_indexCount++] = (uint)(id);
-                    m_indices[m_indexCount++] = (uint)(id + 1 + m_resolution.y);
-                    m_indices[m_indexCount++] = (uint)(id + 1 + m_resolution.y);
-                    m_indices[m_indexCount++] = (uint)(id);
-                    m_indices[m_indexCount++] = (uint)(id + m_resolution.y);
+                    m_indices[index + 0] = (uint)id1;
+                    m_indices[index + 1] = (uint)id0;
+                    m_indices[index + 2] = (uint)id2;
+                    m_indices[index + 3] = (uint)id2;
+                    m_indices[index + 4] = (uint)id0;
+                    m_indices[index + 5] = (uint)id3;
                 }
             }
 
@@ -246,55 +311,43 @@ namespace Scsewell.PositionBasedDynamics
             
             ClothManager.DeregisterCloth(this);
             
-            m_particles.Dispose();
-            m_constraints.Dispose();
-            m_indices.Dispose();
+            DisposeUtils.DisposeSafe(ref m_particles);
+            DisposeUtils.DisposeSafe(ref m_constraints);
+            DisposeUtils.DisposeSafe(ref m_indices);
+            m_constraintBatches.Clear();
 
             m_resourcesCreated = false;
         }
 
-        /// <inheritdoc />
-        public NativeSlice<ClothParticle> GetParticles()
+        void OnDrawGizmosSelected()
         {
-            return m_particles.Slice();
-        }
-
-        /// <inheritdoc />
-        public NativeSlice<uint> GetIndices()
-        {
-            return m_indices.Slice(0, m_indexCount);
-        }
-
-        /// <inheritdoc />
-        public int GetConstraintBatchSize(int batchIndex)
-        {
-            return m_constraintBatchSizes[batchIndex];
-        }
-
-        /// <inheritdoc />
-        public void GetConstraintBatch(int batchIndex, out NativeSlice<ClothConstraint> constraints, out float compliance)
-        {
-            if (batchIndex < 4)
+            if (!m_resourcesCreated || !m_debug)
             {
-                compliance = Mathf.Pow(m_stretchCompliance, 4);
+                return;
             }
-            else if (batchIndex < 8)
-            {
-                compliance = Mathf.Pow(m_shearCompliance, 4);
-            }
-            else if (batchIndex < 12)
-            {
-                compliance = Mathf.Pow(m_bendingCompliance, 4);
-            }
-            else
-            {
-                compliance = 0f;
-            }
-
-            var batchOffset = m_particles.Length * batchIndex;
-            var batchSize = m_constraintBatchSizes[batchIndex];
             
-            constraints = m_constraints.Slice(batchOffset, batchSize);
+            for (var i = 0; i < ConstraintBatchCount; i++)
+            {
+                var color = Color.HSVToRGB((float)i / ConstraintBatchCount, 1f, 1f);
+                
+                GetConstraintBatch(i, out var constraints, out _);
+
+                for (var j = 0; j < constraints.Length; j++)
+                {
+                    var constraint = constraints[j];
+                    var p0 = m_particles[constraint.index0];
+                    var p1 = m_particles[constraint.index1];
+
+                    if (i >= 8)
+                    {
+                        var offset = 0.5f * m_spacing * (i % 2 == 0 ? 1f : -1f);
+                        p0.restPosition.z += offset;
+                        p1.restPosition.z += offset;
+                    }
+                        
+                    Debug.DrawLine(p0.restPosition, p1.restPosition, color);
+                }
+            }
         }
     }
 }

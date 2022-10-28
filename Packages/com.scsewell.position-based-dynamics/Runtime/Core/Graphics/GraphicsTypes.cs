@@ -24,6 +24,7 @@ namespace Scsewell.PositionBasedDynamics
         fixed float _ConstraintBatchCompliance[4 * Constants.maxConstraintBatches];
         public uint _ParticleCount;
         public uint _TriangleCount;
+        public uint _ConstraintBatchCount;
         public float3 _BoundsMin;
         public float3 _BoundsMax;
 

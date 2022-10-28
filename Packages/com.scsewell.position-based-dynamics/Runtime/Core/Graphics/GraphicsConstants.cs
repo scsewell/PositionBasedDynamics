@@ -15,7 +15,7 @@ namespace Scsewell.PositionBasedDynamics
         /// <summary>
         /// The maximum number of distance batches per cloth instance.
         /// </summary>
-        public const int maxConstraintBatches = 8;
+        public const int maxConstraintBatches = 12;
         
         /// <summary>
         /// The number of particles processed per compute thread.
