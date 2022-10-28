@@ -182,6 +182,7 @@ void UpdateMesh(uint threadID)
         uint index = (2 * threadID) + p;
         uint byteAddress = 3 * 4 * index;
 
+        // todo: use groupshared?
         float3 position = index < _ParticleCount ? _CurrentPositions[index].xyz : 0;
         float3 normalSum = index < _ParticleCount ? asfloat(_Normals[index]) : 0;
         float3 normal = normalize(normalSum);

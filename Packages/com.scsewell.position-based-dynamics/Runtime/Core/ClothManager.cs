@@ -258,19 +258,15 @@ namespace Scsewell.PositionBasedDynamics
             
             // advance the simulation time
             s_deltaTimeRemainder += Math.Max(deltaTime, 0f);
+            
             var subStepCount = Mathf.FloorToInt(s_deltaTimeRemainder * s_subStepsPerSecond);
             
-            float subStepDeltaTime;
             if (subStepCount > s_maxSubStepsPerFrame)
             {
                 subStepCount = s_maxSubStepsPerFrame;
-                subStepDeltaTime = s_deltaTimeRemainder / subStepCount;
             }
-            else
-            {
-                subStepDeltaTime = 1f / s_subStepsPerSecond;
-            }
-
+            
+            var subStepDeltaTime = 1f / s_subStepsPerSecond;
             var stepDeltaTime = subStepCount * subStepDeltaTime;
             s_deltaTimeRemainder -= stepDeltaTime;
             

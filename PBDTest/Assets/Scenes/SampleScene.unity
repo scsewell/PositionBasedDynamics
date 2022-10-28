@@ -160,7 +160,7 @@ MonoBehaviour:
   m_spacing: 0.1
   m_hang: 1
   m_stretchCompliance: 0
-  m_shearCompliance: 0.001
+  m_shearCompliance: 0.1
   m_bendingCompliance: 0.01
   m_gravity: {x: 0, y: -9.81, z: 0}
   m_debug: 0
