@@ -22,14 +22,5 @@ namespace Scsewell.PositionBasedDynamics
         /// The target distance between the constrained particles.
         /// </summary>
         public float restLength;
-        
-        /// <summary>
-        /// The inverse of the constraint stiffness.
-        /// </summary>
-        /// <remarks>
-        /// A value of zero makes the constraint perfectly stiff, larger values
-        /// increase the constraint's flexibility.
-        /// </remarks>
-        public float compliance;
     }
 }

@@ -1,6 +1,4 @@
-﻿using System.Runtime.CompilerServices;
-
-using UnityEngine;
+﻿using UnityEngine;
 
 namespace Scsewell.PositionBasedDynamics
 {
@@ -33,15 +31,14 @@ namespace Scsewell.PositionBasedDynamics
             return true;
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static int GetThreadGroupCount(ref this KernelInfo kernel, int threads)
+        public static int GetThreadGroupCount(ref this KernelInfo kernel, int count, int elementsPerThread = 1)
         {
-            return GetThreadGroupCount(threads, kernel.threadGroupSizeX);
+            return GetThreadGroupCount(count, kernel.threadGroupSizeX * elementsPerThread);
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static int GetThreadGroupCount(int threads, int threadsPerGroup)
         {
+            // integer divide that gives the ceil instead of floor
             return ((threads - 1) / threadsPerGroup) + 1;
         }
     }

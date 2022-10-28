@@ -1,83 +1,142 @@
-﻿using System.Collections.Generic;
-using System.Linq;
+﻿using System;
 
 using Unity.Collections;
 using Unity.Mathematics;
 
 using UnityEngine;
-using UnityEngine.Rendering;
 
 namespace Scsewell.PositionBasedDynamics
 {
-    public class TestCloth : Cloth
+    class TestCloth : MonoBehaviour, ICloth
     {
+        const int k_constraintTypeCount = 4;
+        
+        static readonly int4[] k_constraintTypeOffsets =
+        {
+            new int4(0, 0, 0, 1), // stretch
+            new int4(0, 0, 1, 0),
+            new int4(0, 0, 1, 1), // shear
+            new int4(0, 1, 1, 0),
+            new int4(0, 0, 0, 2), // bending
+            new int4(0, 0, 2, 0),
+        };
+
         [SerializeField]
         Material m_material;
         [SerializeField]
-        Vector2Int m_resolution = new Vector2Int(30, 200);
+        Vector2Int m_resolution = new Vector2Int(44, 44);
         [SerializeField]
-        bool m_hang = false;
-        [SerializeField, Range(0, 10f)]
+        Bounds m_bounds = new Bounds(Vector3.zero, Vector3.one);
+        [SerializeField]
+        float m_spacing = 0.01f;
+        [SerializeField]
+        bool m_hang = true;
+        [SerializeField, Range(0, 1f)]
         float m_stretchCompliance = 0f;
-        [SerializeField, Range(0, 10f)]
+        [SerializeField, Range(0, 1f)]
         float m_shearCompliance = 0.001f;
-        [SerializeField, Range(0, 10f)]
+        [SerializeField, Range(0, 1f)]
         float m_bendingCompliance = 1f;
+        [SerializeField]
+        Vector3 m_gravity = new Vector3(0, -9.81f, 0);
+        [SerializeField]
+        bool m_debug = false;
 
-        Mesh m_mesh;
-        MeshFilter m_filter;
-        MeshRenderer m_renderer;
+        bool m_resourcesCreated;
+        bool m_resourcesDirty;
+        ClothDirtyFlags m_dirtyFlags;
+        NativeArray<ClothParticle> m_particles;
+        NativeArray<ClothConstraint> m_constraints;
+        NativeArray<uint> m_indices;
+        int[] m_constraintBatchSizes;
+        int m_indexCount;
+
+        /// <inheritdoc />
+        public string Name => name;
+
+        /// <inheritdoc />
+        public int ParticleCount => m_particles.Length;
+
+        /// <inheritdoc />
+        public int IndexCount => m_indexCount;
+
+        /// <inheritdoc />
+        public int ConstraintBatchCount => m_constraintBatchSizes.Length;
+
+        /// <inheritdoc />
+        public Bounds Bounds => m_bounds;
+
+        /// <inheritdoc />
+        public float3 Gravity => m_gravity;
         
         /// <inheritdoc />
-        protected override void OnEnable()
-        {
-            base.OnEnable();
-
-            m_mesh = new Mesh
-            {
-                name = name,
-            };
-            m_mesh.MarkDynamic();
-
-            m_filter = GetComponent<MeshFilter>();
-
-            if (m_filter == null)
-            {
-                m_filter = gameObject.AddComponent<MeshFilter>();
-            }
-            
-            m_filter.sharedMesh = m_mesh;
-            
-            m_renderer = GetComponent<MeshRenderer>();
-
-            if (m_renderer == null)
-            {
-                m_renderer = gameObject.AddComponent<MeshRenderer>();
-            }
-
-            m_renderer.sharedMaterial = m_material;
-        }
+        public Matrix4x4 Transform => transform.localToWorldMatrix;
 
         /// <inheritdoc />
-        protected override void OnDisable()
-        {
-            base.OnDisable();
+        public Material Material => m_material;
 
-            if (m_mesh != null)
+        /// <inheritdoc />
+        ClothDirtyFlags ICloth.DirtyFlags
+        {
+            get => m_dirtyFlags;
+            set => m_dirtyFlags = value;
+        }
+
+        void OnValidate()
+        {
+            m_resourcesDirty = true;
+        }
+        
+        void OnEnable()
+        {
+            m_resourcesDirty = true;
+        }
+
+        void OnDisable()
+        {
+            DisposeResources();
+        }
+
+        void LateUpdate()
+        {
+            if (m_resourcesDirty)
             {
-                Destroy(m_mesh);
-                m_mesh = null;
+                CreateResources();
+                m_resourcesDirty = false;
             }
         }
 
-        /// <inheritdoc />
-        protected override void GetCloth(out NativeSlice<ClothParticle> particles, out NativeSlice<Constraint> constraints)
+        void OnDrawGizmosSelected()
         {
-            particles = new NativeArray<ClothParticle>(
+            if (m_resourcesCreated && m_debug)
+            {
+                for (var i = 0; i < ConstraintBatchCount; i++)
+                {
+                    var color = Color.HSVToRGB((float)i / ConstraintBatchCount, 1f, 1f);
+                
+                    GetConstraintBatch(i, out var constraints, out _);
+
+                    for (var j = 0; j < constraints.Length; j++)
+                    {
+                        var constraint = constraints[j];
+                        var p0 = m_particles[constraint.index0];
+                        var p1 = m_particles[constraint.index1];
+                    
+                        Debug.DrawLine(p0.restPosition, p1.restPosition, color);
+                    }
+                }
+            }
+        }
+
+        void CreateResources()
+        {
+            DisposeResources();
+
+            m_particles = new NativeArray<ClothParticle>(
                 m_resolution.x * m_resolution.y,
-                Allocator.Temp,
+                Allocator.Persistent,
                 NativeArrayOptions.UninitializedMemory
-            ).Slice();
+            );
             
             for (var i = 0; i < m_resolution.x; i++)
             {
@@ -86,13 +145,13 @@ namespace Scsewell.PositionBasedDynamics
                     var id = i * m_resolution.y + j;
 
                     var position = new Vector3(
-                        -m_resolution.x * Spacing * 0.5f + i * Spacing,
-                        0.2f + j * Spacing,
+                        m_spacing * (-0.5f * m_resolution.x + i),
+                        m_spacing * (-0.5f * m_resolution.y + j),
                         0f
                     );
                     position += 0.001f * UnityEngine.Random.insideUnitSphere;
                     
-                    particles[id] = new ClothParticle
+                    m_particles[id] = new ClothParticle
                     {
                         restPosition = position,
                         inverseMass = (m_hang && j == (m_resolution.y - 1) && (i == 0 || i == m_resolution.x - 1)) ? 0f : 1f,
@@ -100,115 +159,142 @@ namespace Scsewell.PositionBasedDynamics
                 }
             }
 
-            var constraintTypeCount = 6;
+            var batchCount = 2 * k_constraintTypeCount;
+            m_constraintBatchSizes = new int[batchCount];
             
-            var offsets = new NativeArray<int4>(
-                constraintTypeCount,
-                Allocator.Temp,
-                NativeArrayOptions.UninitializedMemory
-            )
-            {
-                [0] = new int4(0, 0, 0, 1),
-                [1] = new int4(0, 0, 1, 0),
-                [2] = new int4(0, 0, 1, 1),
-                [3] = new int4(0, 1, 1, 0),
-                [4] = new int4(0, 0, 0, 2),
-                [5] = new int4(0, 0, 2, 0),
-            };
-            
-            var compliances = new NativeArray<float>(
-                constraintTypeCount,
-                Allocator.Temp,
-                NativeArrayOptions.UninitializedMemory
-            )
-            {
-                [0] = m_stretchCompliance,
-                [1] = m_stretchCompliance,
-                [2] = m_shearCompliance,
-                [3] = m_shearCompliance,
-                [4] = m_bendingCompliance,
-                [5] = m_bendingCompliance,
-            };
-            
-            var tempConstraints = new NativeArray<Constraint>(
-                particles.Length * constraintTypeCount,
-                Allocator.Temp,
+            m_constraints = new NativeArray<ClothConstraint>(
+                batchCount * m_particles.Length,
+                Allocator.Persistent,
                 NativeArrayOptions.UninitializedMemory
             );
 
-            var num = 0;
-
-            for (var constType = 0; constType < constraintTypeCount; constType++)
+            for (var type = 0; type < k_constraintTypeCount; type++)
             {
                 for (var i = 0; i < m_resolution.x; i++)
                 {
                     for (var j = 0; j < m_resolution.y; j++)
                     {
-                        var offset = offsets[constType] + new int4(i, j, i, j);
-                        
-                        if (offset.x < m_resolution.x && offset.y < m_resolution.y && offset.z < m_resolution.x && offset.w < m_resolution.y)
+                        var offset = k_constraintTypeOffsets[type] + new int4(i, j, i, j);
+
+                        if (offset.x >= m_resolution.x ||
+                            offset.y >= m_resolution.y ||
+                            offset.z >= m_resolution.x ||
+                            offset.w >= m_resolution.y)
                         {
-                            var id0 = offset.x * m_resolution.y + offset.y;
-                            var id1 = offset.z * m_resolution.y + offset.w;
-                            
-                            tempConstraints[num++] = new Constraint
-                            {
-                                index0 = id0,
-                                index1 = id1,
-                                restLength = math.distance(particles[id0].restPosition, particles[id1].restPosition),
-                                compliance = compliances[constType],
-                            };
+                            continue;
                         }
+                        
+                        var id0 = offset.x * m_resolution.y + offset.y;
+                        var id1 = offset.z * m_resolution.y + offset.w;
+
+                        var batchIndex = (2 * type) + type switch
+                        {
+                            0 => j % 2,
+                            _ => i % 2,
+                        };
+                        var batchSize = m_constraintBatchSizes[batchIndex]++;
+                        var constraintIndex = (m_particles.Length * batchIndex) + batchSize;
+                        
+                        m_constraints[constraintIndex] = new ClothConstraint
+                        {
+                            index0 = id0,
+                            index1 = id1,
+                            restLength = math.distance(
+                                m_particles[id0].restPosition,
+                                m_particles[id1].restPosition
+                            ),
+                        };
                     }
                 }
             }
             
-            constraints = tempConstraints.Slice(0, num);
+            m_indices = new NativeArray<uint>(
+                m_resolution.x * m_resolution.y * 6,
+                Allocator.Persistent,
+                NativeArrayOptions.UninitializedMemory
+            );
+
+            m_indexCount = 0;
+            
+            for (var i = 0; i < m_resolution.x - 1; i++)
+            {
+                for (var j = 0; j < m_resolution.y - 1; j++)
+                {
+                    var id = i * m_resolution.y + j;
+                    
+                    m_indices[m_indexCount++] = (uint)(id + 1);
+                    m_indices[m_indexCount++] = (uint)(id);
+                    m_indices[m_indexCount++] = (uint)(id + 1 + m_resolution.y);
+                    m_indices[m_indexCount++] = (uint)(id + 1 + m_resolution.y);
+                    m_indices[m_indexCount++] = (uint)(id);
+                    m_indices[m_indexCount++] = (uint)(id + m_resolution.y);
+                }
+            }
+
+            m_resourcesCreated = true;
+            m_dirtyFlags = ClothDirtyFlags.All;
+            
+            ClothManager.RegisterCloth(this);
+        }
+
+        void DisposeResources()
+        {
+            if (!m_resourcesCreated)
+            {
+                return;
+            }
+            
+            ClothManager.DeregisterCloth(this);
+            
+            m_particles.Dispose();
+            m_constraints.Dispose();
+            m_indices.Dispose();
+
+            m_resourcesCreated = false;
         }
 
         /// <inheritdoc />
-        protected override void ClothUpdated(NativeSlice<float3> positions)
+        public NativeSlice<ClothParticle> GetParticles()
         {
-            if (m_mesh != null)
+            return m_particles.Slice();
+        }
+
+        /// <inheritdoc />
+        public NativeSlice<uint> GetIndices()
+        {
+            return m_indices.Slice(0, m_indexCount);
+        }
+
+        /// <inheritdoc />
+        public int GetConstraintBatchSize(int batchIndex)
+        {
+            return m_constraintBatchSizes[batchIndex];
+        }
+
+        /// <inheritdoc />
+        public void GetConstraintBatch(int batchIndex, out NativeSlice<ClothConstraint> constraints, out float compliance)
+        {
+            if (batchIndex < 4)
             {
-                m_mesh.Clear();
-
-                var vertices = new Vector3[positions.Length];
-
-                for (var i = 0; i < positions.Length; i++)
-                {
-                    vertices[i] = positions[i];
-                }
-                
-                var indices = new List<int>();
-            
-                for (var i = 0; i < m_resolution.x; i++)
-                {
-                    for (var j = 0; j < m_resolution.y; j++)
-                    {
-                        var id = i * m_resolution.y + j;
-                    
-                        if (i < m_resolution.x - 1 && j < m_resolution.y - 1)
-                        {
-                            indices.Add(id + 1);
-                            indices.Add(id);
-                            indices.Add(id + 1 + m_resolution.y);
-                            indices.Add(id + 1 + m_resolution.y);
-                            indices.Add(id);
-                            indices.Add(id + m_resolution.y);
-                        }
-                    }
-                }
-                
-                m_mesh.vertices = vertices;
-
-                m_mesh.indexFormat = IndexFormat.UInt32;
-                m_mesh.triangles = indices.ToArray();
-
-                m_mesh.RecalculateNormals();
-                m_mesh.RecalculateBounds();
-                m_mesh.UploadMeshData(false);
+                compliance = Mathf.Pow(m_stretchCompliance, 4);
             }
+            else if (batchIndex < 8)
+            {
+                compliance = Mathf.Pow(m_shearCompliance, 4);
+            }
+            else if (batchIndex < 12)
+            {
+                compliance = Mathf.Pow(m_bendingCompliance, 4);
+            }
+            else
+            {
+                compliance = 0f;
+            }
+
+            var batchOffset = m_particles.Length * batchIndex;
+            var batchSize = m_constraintBatchSizes[batchIndex];
+            
+            constraints = m_constraints.Slice(batchOffset, batchSize);
         }
     }
 }

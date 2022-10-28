@@ -5,7 +5,12 @@ namespace Scsewell.PositionBasedDynamics
 {
     static class CommandBufferPool
     {
-        static ObjectPool<CommandBuffer> s_bufferPool = new ObjectPool<CommandBuffer>(null, x => x.Clear(), x => x.Release());
+        static ObjectPool<CommandBuffer> s_bufferPool = new ObjectPool<CommandBuffer>(
+            () => new CommandBuffer(),
+            x => x.Clear(),
+            x => x.Clear(),
+            x => x.Release()
+        );
 
         public static CommandBuffer Get(string name)
         {
