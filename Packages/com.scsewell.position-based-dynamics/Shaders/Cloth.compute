@@ -73,8 +73,8 @@ Particle LoadParticleLocal(uint index)
 {
     bool isValid = index < _ParticleCount;
 
-    float3 data0 = isValid ? gs_Data[(2 * index)] : 0;
-    float3 data1 = isValid ? gs_Data[(2 * index) + 1] : 0;
+    float3 data0 = isValid ? gs_Data[index] : 0;
+    float3 data1 = isValid ? gs_Data[(SHARED_MEMORY_SIZE / 24) + index] : 0;
 
     Particle particle;
     particle.inverseMass = asuint(data0.x) & 0x1;
@@ -91,8 +91,8 @@ void StoreParticleLocal(uint index, Particle particle)
     
     if (index < _ParticleCount)
     {
-        gs_Data[(2 * index)] = data0;
-        gs_Data[(2 * index) + 1] = data1;
+        gs_Data[index] = data0;
+        gs_Data[(SHARED_MEMORY_SIZE / 24) + index] = data1;
     }
 }
 
@@ -161,7 +161,7 @@ void SumTriangleNormals(uint triangleIndex)
     float3 p1 = _CurrentPositions[tri.y];
     float3 p2 = _CurrentPositions[tri.z];
 
-    float3 normal = cross(p1 - p0, p2 - p0);
+    float3 normal = normalize(cross(p1 - p0, p2 - p0));
     
     uint seed = tri.x + tri.y + tri.z;
 
@@ -173,14 +173,31 @@ void SumTriangleNormals(uint triangleIndex)
     }
 }
 
-void SumTriangleNormals()
+void SumTriangleNormals(uint threadID, uint localID, uint groupID)
 {
-    // uint trianglesPerThread = _TriangleCount / (THREAD_GROUP_SIZE * _ThreadGroupCount) 
-    //
-    // for (uint i = 0; i < _TriangleCount / ; i += THREAD_GROUP_SIZE)
-    // {
-    //     THREAD_GROUP_SIZE
-    // }
+    UNITY_UNROLL
+    for (uint p = 0; p < PARTICLES_PER_THREAD; p++)
+    {
+        uint index = (2 * threadID) + p;
+        
+        _Normals[index] = asuint(float4(0, 0, 0, 0));
+    }
+    
+    DeviceMemoryBarrierWithGroupSync(); 
+
+    uint totalThreads = THREAD_GROUP_SIZE * _ThreadGroupCount;
+
+    
+    //uint trianglesPerThread = _TriangleCount / (THREAD_GROUP_SIZE * _ThreadGroupCount);
+    uint trianglesPerThread = ((_TriangleCount - 1) / totalThreads) + 1;
+    
+    for (uint i = 0; i < trianglesPerThread; i++)
+    {
+        uint index = (trianglesPerThread * ((THREAD_GROUP_SIZE * groupID) + threadID)) + i;
+        SumTriangleNormals(index);
+    }
+    
+    DeviceMemoryBarrierWithGroupSync(); 
 }
 
 void UpdateMeshParticle(uint index, Particle particle)
@@ -228,7 +245,9 @@ void CSMain(uint threadID : SV_DispatchThreadID, uint localID : SV_GroupThreadID
 
         SolveDistanceConstraints(threadID, localID, groupID);
     }
-
+    
+    SumTriangleNormals(threadID, localID, groupID);
+    
     UNITY_UNROLL
     for (uint p = 0; p < PARTICLES_PER_THREAD; p++)
     {
@@ -238,6 +257,4 @@ void CSMain(uint threadID : SV_DispatchThreadID, uint localID : SV_GroupThreadID
         StoreParticleGlobal(index, particle);
         UpdateMeshParticle(index, particle);
     }
-    
-    //SumTriangleNormals();
 }

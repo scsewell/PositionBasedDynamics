@@ -19,6 +19,7 @@ float4 _ConstraintBatchCompliance[MAX_CONSTRAINT_BATCHES];
 uint _ParticleCount;
 uint _TriangleCount;
 uint _ConstraintBatchCount;
+uint _ThreadGroupCount;
 float3 _BoundsMin;
 float3 _BoundsMax;
 CBUFFER_END

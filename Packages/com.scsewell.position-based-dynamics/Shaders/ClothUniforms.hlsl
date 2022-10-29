@@ -8,8 +8,8 @@ RWStructuredBuffer<float4> _CurrentPositions;
 RWStructuredBuffer<float4> _PreviousPositions;
 RWStructuredBuffer<uint4> _Normals;
 
-ByteAddressBuffer _MeshIndices;
 RWByteAddressBuffer _MeshPositions;
 RWByteAddressBuffer _MeshNormals;
+ByteAddressBuffer _MeshIndices;
 
 #endif // CLOTH_UNIFORMS_INCLUDED

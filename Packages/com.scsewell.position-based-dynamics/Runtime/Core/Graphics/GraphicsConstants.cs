@@ -41,9 +41,9 @@ namespace Scsewell.PositionBasedDynamics
             public static readonly int _PreviousPositions = Shader.PropertyToID("_PreviousPositions");
             public static readonly int _Normals = Shader.PropertyToID("_Normals");
             
-            public static readonly int _MeshIndices = Shader.PropertyToID("_MeshIndices");
             public static readonly int _MeshPositions = Shader.PropertyToID("_MeshPositions");
             public static readonly int _MeshNormals = Shader.PropertyToID("_MeshNormals");
+            public static readonly int _MeshIndices = Shader.PropertyToID("_MeshIndices");
         }
     }
 

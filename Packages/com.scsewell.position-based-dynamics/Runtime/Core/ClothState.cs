@@ -47,6 +47,7 @@ namespace Scsewell.PositionBasedDynamics
         Mesh m_mesh;
         GraphicsBuffer m_meshPositionBuffer;
         GraphicsBuffer m_meshNormalBuffer;
+        GraphicsBuffer m_meshIndexBuffer;
 
         DirtyFlags m_dirtyFlags = DirtyFlags.All;
         int m_particleCount;
@@ -98,7 +99,7 @@ namespace Scsewell.PositionBasedDynamics
             // create rendering mesh
             m_mesh = new Mesh
             {
-                name = $"{nameof(ClothState)}_{Cloth.Name}_mesh",
+                name = $"{nameof(ClothState)}_{Cloth.Name}_Mesh",
             };
         }
         
@@ -125,6 +126,7 @@ namespace Scsewell.PositionBasedDynamics
             DisposeUtils.DestroySafe(ref m_mesh);
             DisposeUtils.DisposeSafe(ref m_meshPositionBuffer);
             DisposeUtils.DisposeSafe(ref m_meshNormalBuffer);
+            DisposeUtils.DisposeSafe(ref m_meshIndexBuffer);
             
             // clear managed state
             m_dirtyFlags = DirtyFlags.All;
@@ -203,6 +205,7 @@ namespace Scsewell.PositionBasedDynamics
             m_mesh.Clear();
             DisposeUtils.DisposeSafe(ref m_meshPositionBuffer);
             DisposeUtils.DisposeSafe(ref m_meshNormalBuffer);
+            DisposeUtils.DisposeSafe(ref m_meshIndexBuffer);
             
             // find the required buffer sizes
             m_particleCount = Mathf.Max(Cloth.ParticleCount, 0);
@@ -251,6 +254,11 @@ namespace Scsewell.PositionBasedDynamics
                 Debug.LogError($"Cloth \"{Cloth.Name}\" has no constraints.");
                 return;
             }
+
+            var threadGroupCount = ClothManager.s_clothKernel.GetThreadGroupCount(
+                m_particleCount,
+                Constants.particlesPerThread
+            );
 
             // get the buffer data
             var inverseMasses = new NativeArray<float>(
@@ -302,6 +310,7 @@ namespace Scsewell.PositionBasedDynamics
                 _ParticleCount = (uint)m_particleCount,
                 _TriangleCount = (uint)(m_indexCount / 3),
                 _ConstraintBatchCount = (uint)constraintBatchCount,
+                _ThreadGroupCount = (uint)threadGroupCount,
                 _BoundsMin = Cloth.Bounds.min,
                 _BoundsMax = Cloth.Bounds.max,
             };
@@ -405,6 +414,9 @@ namespace Scsewell.PositionBasedDynamics
             
             m_meshNormalBuffer = m_mesh.GetVertexBuffer(1);
             m_meshNormalBuffer.name = $"{nameof(ClothState)}_{Cloth.Name}_MeshNormals";
+
+            m_meshIndexBuffer = m_mesh.GetIndexBuffer();
+            m_meshIndexBuffer.name = $"{nameof(ClothState)}_{Cloth.Name}_MeshIndices";
             
             m_mesh.SetVertexBufferData(uvs, 0, 0, m_particleCount, 2);
             m_mesh.SetIndexBufferData(indices, 0, 0, indices.Length, MeshUpdateFlags.DontValidateIndices);
@@ -479,11 +491,17 @@ namespace Scsewell.PositionBasedDynamics
                 Properties.Cloth._MeshNormals,
                 m_meshNormalBuffer
             );
-            
+            m_cmdBuffer.SetComputeBufferParam(
+                ClothManager.s_clothShader,
+                ClothManager.s_clothKernel.kernelID,
+                Properties.Cloth._MeshIndices,
+                m_meshIndexBuffer
+            );
+
             m_cmdBuffer.DispatchCompute(
                 ClothManager.s_clothShader,
                 ClothManager.s_clothKernel.kernelID, 
-                ClothManager.s_clothKernel.GetThreadGroupCount(m_particleCount, Constants.particlesPerThread), 1, 1
+                threadGroupCount, 1, 1
             );
         }
     }

@@ -25,6 +25,7 @@ namespace Scsewell.PositionBasedDynamics
         public uint _ParticleCount;
         public uint _TriangleCount;
         public uint _ConstraintBatchCount;
+        public uint _ThreadGroupCount;
         public float3 _BoundsMin;
         public float3 _BoundsMax;
 
