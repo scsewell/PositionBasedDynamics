@@ -57,6 +57,8 @@ namespace Scsewell.PositionBasedDynamics
         [SerializeField]
         bool m_hang = true;
         [SerializeField]
+        bool m_jitter = false;
+        [SerializeField]
         Vector3 m_gravity = new Vector3(0, -9.81f, 0);
         [SerializeField]
         bool m_debug = false;
@@ -181,7 +183,10 @@ namespace Scsewell.PositionBasedDynamics
                         m_spacing * (-0.5f * (m_resY - 1) + j),
                         0f
                     );
-                    position += 0.001f * UnityEngine.Random.insideUnitSphere;
+                    if (m_jitter)
+                    {
+                        position += 0.001f * UnityEngine.Random.insideUnitSphere;
+                    }
                     
                     m_particles[id] = new ClothParticle
                     {
