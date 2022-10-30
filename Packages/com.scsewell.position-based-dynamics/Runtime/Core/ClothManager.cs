@@ -70,7 +70,7 @@ namespace Scsewell.PositionBasedDynamics
         public static float SubStepsPerSecond
         {
             get => s_subStepsPerSecond;
-            set => Mathf.Clamp(s_subStepsPerSecond, 1f, 1000f);
+            set => s_subStepsPerSecond = Mathf.Clamp(value, 1f, 1000f);
         }
         
         /// <summary>
@@ -83,7 +83,7 @@ namespace Scsewell.PositionBasedDynamics
         public static int MaxSubStepsPerFrame
         {
             get => s_maxSubStepsPerFrame;
-            set => Mathf.Clamp(s_maxSubStepsPerFrame, 1, 1000);
+            set => s_maxSubStepsPerFrame = Mathf.Clamp(value, 1, 1000);
         }
 
         static ClothManager()
