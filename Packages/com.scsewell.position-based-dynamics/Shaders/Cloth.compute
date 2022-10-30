@@ -21,18 +21,17 @@ struct Particle
     float3 previousPosition;
 };
 
-/*
 struct CompressedPosition
 {
     uint2 packedData;
 };
 
-float3 DecompressPosition(uint compressedPosition, out uint bit)
+CompressedPosition CompressPosition(float3 position, uint bit)
 {
     
 }
 
-uint CompressPosition(float3 position, uint bit)
+float3 DecompressPosition(CompressedPosition compressedPosition, out uint bit)
 {
     
 }
@@ -47,7 +46,6 @@ Particle DecompressParticle(CompressedParticle compressedParticle)
 {
     
 }
-*/
 
 Particle LoadParticleGlobal(uint index)
 {
@@ -114,13 +112,15 @@ void SolveDistanceConstraints(uint threadID, uint localID, uint groupID)
 {
     // Process constraints in batches where no two constraints in the same batch
     // affect the same particles. This avoids the need to write atomically.
-    uint batchOffset = 0;
 
-    //[unroll(MAX_CONSTRAINT_BATCHES)]
+    // todo: profile unroll, see if registr increase is a real problem
+    [unroll(MAX_CONSTRAINT_BATCHES)]
     for (uint batch = 0; batch < _ConstraintBatchCount; batch++)
     {
-        uint batchSize = _ConstraintBatchSize[batch].x;
-        float compliance = _ConstraintBatchCompliance[batch].x;
+        uint3 batchData = _ConstraintBatchData[batch].xyz;
+        uint batchOffset = batchData.x;
+        uint batchSize = batchData.y;
+        float compliance = asfloat(batchData.z);
         
         DistanceConstraint constraint = LoadDistanceConstraint(threadID, batchOffset, batchSize);
         Particle p0 = LoadParticleLocal(constraint.indices.x);
@@ -145,8 +145,6 @@ void SolveDistanceConstraints(uint threadID, uint localID, uint groupID)
         }
         
         GroupMemoryBarrierWithGroupSync();
-        
-        batchOffset += batchSize;
     }
 }
 
@@ -187,7 +185,6 @@ void SumTriangleNormals(uint threadID, uint localID, uint groupID)
 
     uint totalThreads = THREAD_GROUP_SIZE * _ThreadGroupCount;
 
-    
     //uint trianglesPerThread = _TriangleCount / (THREAD_GROUP_SIZE * _ThreadGroupCount);
     uint trianglesPerThread = ((_TriangleCount - 1) / totalThreads) + 1;
     

@@ -20,23 +20,21 @@ namespace Scsewell.PositionBasedDynamics
     {
         internal static readonly int k_size = UnsafeUtility.SizeOf<ClothStaticPropertyBuffer>();
 
-        fixed uint _ConstraintBatchSize[4 * Constants.maxConstraintBatches];
-        fixed float _ConstraintBatchCompliance[4 * Constants.maxConstraintBatches];
+        fixed uint _ConstraintBatchData[4 * Constants.maxConstraintBatches];
         public uint _ParticleCount;
         public uint _TriangleCount;
         public uint _ConstraintBatchCount;
         public uint _ThreadGroupCount;
         public float3 _BoundsMin;
+        uint _Padding0;
         public float3 _BoundsMax;
+        uint _Padding1;
 
-        public void SetConstraintBatchSize(int index, uint value)
+        public void SetConstraintData(int index, uint batchOffset, uint batchSize, float compliance)
         {
-            _ConstraintBatchSize[4 * index] = value;
-        }
-        
-        public void SetConstraintBatchCompliance(int index, float value)
-        {
-            _ConstraintBatchCompliance[4 * index] = value;
+            _ConstraintBatchData[(4 * index) + 0] = batchOffset;
+            _ConstraintBatchData[(4 * index) + 1] = batchSize;
+            _ConstraintBatchData[(4 * index) + 2] = *(uint*)&compliance;
         }
     }
     

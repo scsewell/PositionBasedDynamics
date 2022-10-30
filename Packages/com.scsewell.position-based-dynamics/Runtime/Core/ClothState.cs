@@ -321,8 +321,7 @@ namespace Scsewell.PositionBasedDynamics
             {
                 Cloth.GetConstraintBatch(i, out var constraints, out var compliance);
 
-                staticProperties.SetConstraintBatchSize(i, (uint)constraints.Length);
-                staticProperties.SetConstraintBatchCompliance(i, compliance);
+                staticProperties.SetConstraintData(i, (uint)currentConstraint, (uint)constraints.Length, compliance);
                 
                 for (var j = 0; j < constraints.Length; j++)
                 {

@@ -14,14 +14,13 @@ float _SubStepDeltaTime;
 CBUFFER_END
 
 CBUFFER_START(ClothStaticPropertyBuffer)
-uint4 _ConstraintBatchSize[MAX_CONSTRAINT_BATCHES];
-float4 _ConstraintBatchCompliance[MAX_CONSTRAINT_BATCHES];
+uint4 _ConstraintBatchData[MAX_CONSTRAINT_BATCHES];
 uint _ParticleCount;
 uint _TriangleCount;
 uint _ConstraintBatchCount;
 uint _ThreadGroupCount;
-float3 _BoundsMin;
-float3 _BoundsMax;
+float4 _BoundsMin;
+float4 _BoundsMax;
 CBUFFER_END
 
 CBUFFER_START(ClothDynamicPropertyBuffer)
