@@ -8,20 +8,27 @@
 
 // TODO: decrease size? would need to use global memory to share results,
 // or ensure groups are entirely separate chunks of verts/tris (how to handle overlap?)
-#define THREAD_GROUP_SIZE       1024
+#define THREAD_GROUP_SIZE       512
 #define SHARED_MEMORY_SIZE      ((32 * 1024) / 4)
+#define SHARED_PARTICLES_COUNT  (THREAD_GROUP_SIZE * PARTICLES_PER_THREAD)
 
-groupshared float3 gs_CurrPositions[SHARED_MEMORY_SIZE / 6];
-groupshared float3 gs_PrevPositions[SHARED_MEMORY_SIZE / 6];
+groupshared float3 gs_CurrPositions[SHARED_PARTICLES_COUNT];
+groupshared float3 gs_PrevPositions[SHARED_PARTICLES_COUNT];
 
 void StoreCurrPosition(uint index, float3 position)
 {
-    gs_CurrPositions[index] = position;
+    if (index < SHARED_PARTICLES_COUNT)
+    {
+        gs_CurrPositions[index] = position;
+    }
 }
 
 void StorePrevPosition(uint index, float3 position)
 {
-    gs_PrevPositions[index] = position;
+    if (index < SHARED_PARTICLES_COUNT)
+    {
+        gs_PrevPositions[index] = position;
+    }
 }
 
 float3 LoadCurrPosition(uint index)
@@ -192,7 +199,7 @@ void CSMain(uint threadID : SV_DispatchThreadID, uint localID : SV_GroupThreadID
         float3 normalSum = asfloat(_Normals[index]);
         float3 normal = normalize(normalSum);
         
-        if (threadID < _ParticleCount)
+        if (index < _ParticleCount)
         {
             _CurrentPositions[index].xyz = currPos;
             _PreviousPositions[index].xyz = prevPos;
