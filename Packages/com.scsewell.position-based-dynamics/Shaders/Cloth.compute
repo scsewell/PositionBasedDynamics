@@ -10,96 +10,29 @@
 // or ensure groups are entirely separate chunks of verts/tris (how to handle overlap?)
 #define THREAD_GROUP_SIZE       1024
 #define SHARED_MEMORY_SIZE      ((32 * 1024) / 4)
-#define MAX_SHARED_POSITIONS    (SHARED_MEMORY_SIZE / 3)
-#define CURR_POSITIONS_OFFSET   0
-#define PREV_POSITIONS_OFFSET   (MAX_SHARED_POSITIONS / 2)
 
-groupshared uint gs_Data[SHARED_MEMORY_SIZE];
-
-void StorePosition(uint index, float3 position)
-{
-    gs_Data[(3 * index) + 0] = asuint(position.x);
-    gs_Data[(3 * index) + 1] = asuint(position.y);
-    gs_Data[(3 * index) + 2] = asuint(position.z);
-}
-
-float3 LoadPosition(uint index)
-{
-    uint3 position;
-    position.x = gs_Data[(3 * index) + 0];
-    position.y = gs_Data[(3 * index) + 1];
-    position.z = gs_Data[(3 * index) + 2];
-    return asfloat(position);
-}
+groupshared float3 gs_CurrPositions[SHARED_MEMORY_SIZE / 6];
+groupshared float3 gs_PrevPositions[SHARED_MEMORY_SIZE / 6];
 
 void StoreCurrPosition(uint index, float3 position)
 {
-    StorePosition(CURR_POSITIONS_OFFSET + index, position);
+    gs_CurrPositions[index] = position;
 }
 
 void StorePrevPosition(uint index, float3 position)
 {
-    StorePosition(PREV_POSITIONS_OFFSET + index, position);
+    gs_PrevPositions[index] = position;
 }
 
 float3 LoadCurrPosition(uint index)
 {
-    return LoadPosition(CURR_POSITIONS_OFFSET + index);
+    return gs_CurrPositions[index];
 }
 
 float3 LoadPrevPosition(uint index)
 {
-    return LoadPosition(PREV_POSITIONS_OFFSET + index);
+    return gs_PrevPositions[index];
 }
-
-/*
-Particle LoadParticleGlobal(uint index)
-{
-    bool isValid = index < _ParticleCount;
-    
-    Particle particle;
-    particle.inverseMass = isValid ? _InverseMasses[index] : 0;
-    particle.currentPosition = isValid ? _CurrentPositions[index].xyz : 0;
-    particle.previousPosition = isValid ? _PreviousPositions[index].xyz : 0;
-    return particle;
-}
-
-void StoreParticleGlobal(uint index, Particle particle)
-{
-    if (index < _ParticleCount)
-    {
-        _CurrentPositions[index].xyz = particle.currentPosition;
-        _PreviousPositions[index].xyz = particle.previousPosition;
-    }
-}
-
-Particle LoadParticleLocal(uint index)
-{
-    bool isValid = index < _ParticleCount;
-
-    float3 data0 = isValid ? gs_Data[index] : 0;
-    float3 data1 = isValid ? gs_Data[(SHARED_MEMORY_SIZE / 24) + index] : 0;
-
-    Particle particle;
-    particle.inverseMass = asuint(data0.x) & 0x1;
-    particle.currentPosition = data0;
-    particle.previousPosition = data1;
-    return particle;
-}
-
-void StoreParticleLocal(uint index, Particle particle)
-{
-    float3 data0 = particle.currentPosition;
-    float3 data1 = particle.previousPosition;
-    data0.x = asfloat((asuint(data0.x)& ~0x1) | uint(particle.inverseMass));
-    
-    if (index < _ParticleCount)
-    {
-        gs_Data[index] = data0;
-        gs_Data[(SHARED_MEMORY_SIZE / 24) + index] = data1;
-    }
-}
-*/
 
 void Integrate(inout float3 currentPosition, inout float3 previousPosition, float inverseMass)
 {
@@ -131,7 +64,7 @@ void SolveDistanceConstraints(uint threadID, uint localID, uint groupID)
         float w1 = _InverseMasses[constraint.indices.y];
         float3 p0 = LoadCurrPosition(constraint.indices.x);
         float3 p1 = LoadCurrPosition(constraint.indices.y);
-
+        
         float3 disp = p0 - p1;
         float len = length(disp);
         float3 dir = len != 0 ? disp / len : 0;
@@ -217,11 +150,11 @@ void CSMain(uint threadID : SV_DispatchThreadID, uint localID : SV_GroupThreadID
     for (uint p = 0; p < PARTICLES_PER_THREAD; p++)
     {
         uint index = (2 * threadID) + p;
-        
+
         StoreCurrPosition(index, _CurrentPositions[index].xyz);
         StorePrevPosition(index, _PreviousPositions[index].xyz);
     }
-
+    
     for (uint i = 0; i < _SubStepCount; i++)
     {
         UNITY_UNROLL
@@ -245,7 +178,7 @@ void CSMain(uint threadID : SV_DispatchThreadID, uint localID : SV_GroupThreadID
 
         SolveDistanceConstraints(threadID, localID, groupID);
     }
-    
+
     SumTriangleNormals(threadID, localID, groupID);
     
     UNITY_UNROLL
