@@ -37,7 +37,6 @@ namespace Scsewell.PositionBasedDynamics
         GraphicsBuffer m_dynamicPropertyBuffer;
         
         // compute buffers
-        GraphicsBuffer m_inverseMassesBuffer;
         GraphicsBuffer m_distanceConstraintsBuffer;
         GraphicsBuffer m_currentPositionsBuffer;
         GraphicsBuffer m_previousPositionsBuffer;
@@ -116,7 +115,6 @@ namespace Scsewell.PositionBasedDynamics
             DisposeUtils.DisposeSafe(ref m_dynamicPropertyBuffer);
 
             // dispose compute buffers
-            DisposeUtils.DisposeSafe(ref m_inverseMassesBuffer);
             DisposeUtils.DisposeSafe(ref m_distanceConstraintsBuffer);
             DisposeUtils.DisposeSafe(ref m_currentPositionsBuffer);
             DisposeUtils.DisposeSafe(ref m_previousPositionsBuffer);
@@ -197,7 +195,6 @@ namespace Scsewell.PositionBasedDynamics
             m_cmdBuffer.Clear();
 
             DisposeUtils.DisposeSafe(ref m_distanceConstraintsBuffer);
-            DisposeUtils.DisposeSafe(ref m_inverseMassesBuffer);
             DisposeUtils.DisposeSafe(ref m_currentPositionsBuffer);
             DisposeUtils.DisposeSafe(ref m_previousPositionsBuffer);
             DisposeUtils.DisposeSafe(ref m_normalsBuffer);
@@ -261,12 +258,7 @@ namespace Scsewell.PositionBasedDynamics
             );
 
             // get the buffer data
-            var inverseMasses = new NativeArray<float>(
-                m_particleCount,
-                Allocator.Temp,
-                NativeArrayOptions.UninitializedMemory
-            );
-            var restPositions = new NativeArray<float4>(
+            var restPositions = new NativeArray<CompressedPosition>(
                 m_particleCount,
                 Allocator.Temp,
                 NativeArrayOptions.UninitializedMemory
@@ -289,15 +281,14 @@ namespace Scsewell.PositionBasedDynamics
                 NativeArrayOptions.UninitializedMemory
             );
 
+            var bounds = Cloth.Bounds;
             var clothParticles = Cloth.GetParticles();
             var clothIndices = Cloth.GetIndices();
             
             for (var i = 0; i < m_particleCount; i++)
             {
                 var particle = clothParticles[i];
-
-                inverseMasses[i] = particle.inverseMass;
-                restPositions[i] = new float4(particle.restPosition, 0f);
+                restPositions[i] = new CompressedPosition(particle.restPosition, bounds, particle.inverseMass < 0.5f);
                 uvs[i] = particle.uv;
             }
             for (var i = 0; i < m_indexCount; i++)
@@ -311,8 +302,8 @@ namespace Scsewell.PositionBasedDynamics
                 _TriangleCount = (uint)(m_indexCount / 3),
                 _ConstraintBatchCount = (uint)constraintBatchCount,
                 _ThreadGroupCount = (uint)threadGroupCount,
-                _BoundsMin = Cloth.Bounds.min,
-                _BoundsMax = Cloth.Bounds.max,
+                _BoundsMin = bounds.min,
+                _BoundsMax = bounds.max,
             };
             
             var currentConstraint = 0;
@@ -339,20 +330,20 @@ namespace Scsewell.PositionBasedDynamics
             m_staticPropertyBuffer.SetData(m_staticProperties);
             
             // create compute buffers
-            m_inverseMassesBuffer = new GraphicsBuffer(
+            m_distanceConstraintsBuffer = new GraphicsBuffer(
                 GraphicsBuffer.Target.Structured,
                 GraphicsBuffer.UsageFlags.None,
-                m_particleCount,
-                sizeof(uint)
+                distanceConstraintCount,
+                CompressedDistanceConstraint.k_size
             )
             {
-                name = $"{nameof(ClothState)}_{Cloth.Name}_InverseMasses",
+                name = $"{nameof(ClothState)}_{Cloth.Name}_DistanceConstraints",
             };
             m_currentPositionsBuffer = new GraphicsBuffer(
                 GraphicsBuffer.Target.Structured,
                 GraphicsBuffer.UsageFlags.None,
                 m_particleCount,
-                4 * sizeof(float)
+                CompressedPosition.k_size
             )
             {
                 name = $"{nameof(ClothState)}_{Cloth.Name}_CurrentPositions",
@@ -361,7 +352,7 @@ namespace Scsewell.PositionBasedDynamics
                 GraphicsBuffer.Target.Structured,
                 GraphicsBuffer.UsageFlags.None,
                 m_particleCount,
-                4 * sizeof(float)
+                CompressedPosition.k_size
             )
             {
                 name = $"{nameof(ClothState)}_{Cloth.Name}_PreviousPositions",
@@ -375,24 +366,13 @@ namespace Scsewell.PositionBasedDynamics
             {
                 name = $"{nameof(ClothState)}_{Cloth.Name}_Normals",
             };
-            m_distanceConstraintsBuffer = new GraphicsBuffer(
-                GraphicsBuffer.Target.Structured,
-                GraphicsBuffer.UsageFlags.None,
-                distanceConstraintCount,
-                CompressedDistanceConstraint.k_size
-            )
-            {
-                name = $"{nameof(ClothState)}_{Cloth.Name}_DistanceConstraints",
-            };
             
-            m_inverseMassesBuffer.SetData(inverseMasses);
+            m_distanceConstraintsBuffer.SetData(distanceConstraints);
             m_currentPositionsBuffer.SetData(restPositions);
             m_previousPositionsBuffer.SetData(restPositions);
-            m_distanceConstraintsBuffer.SetData(distanceConstraints);
 
-            inverseMasses.Dispose();
-            restPositions.Dispose();
             distanceConstraints.Dispose();
+            restPositions.Dispose();
             
             // configure the rendering mesh
             m_mesh.vertexBufferTarget |= GraphicsBuffer.Target.Raw;
@@ -453,12 +433,6 @@ namespace Scsewell.PositionBasedDynamics
                 ClothManager.s_clothKernel.kernelID,
                 Properties.Cloth._DistanceConstraints,
                 m_distanceConstraintsBuffer
-            );
-            m_cmdBuffer.SetComputeBufferParam(
-                ClothManager.s_clothShader,
-                ClothManager.s_clothKernel.kernelID,
-                Properties.Cloth._InverseMasses,
-                 m_inverseMassesBuffer
             );
             m_cmdBuffer.SetComputeBufferParam(
                 ClothManager.s_clothShader,

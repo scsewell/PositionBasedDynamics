@@ -7,6 +7,11 @@ struct CompressedDistanceConstraint
     float restLength;
 };
 
+struct CompressedPosition
+{
+    uint2 packedData;
+};
+
 CBUFFER_START(SimulationPropertyBuffer)
 uint _SubStepCount;
 float _DeltaTime;

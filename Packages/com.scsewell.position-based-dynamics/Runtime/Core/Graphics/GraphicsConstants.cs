@@ -35,7 +35,6 @@ namespace Scsewell.PositionBasedDynamics
             public static readonly int _ClothDynamicPropertyBuffer = Shader.PropertyToID("ClothDynamicPropertyBuffer");
 
             public static readonly int _DistanceConstraints = Shader.PropertyToID("_DistanceConstraints");
-            public static readonly int _InverseMasses = Shader.PropertyToID("_InverseMasses");
             
             public static readonly int _CurrentPositions = Shader.PropertyToID("_CurrentPositions");
             public static readonly int _PreviousPositions = Shader.PropertyToID("_PreviousPositions");
