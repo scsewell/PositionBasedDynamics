@@ -1,6 +1,20 @@
 ﻿#ifndef CLOTH_TYPES_INCLUDED
 #define CLOTH_TYPES_INCLUDED
 
+struct GroupData
+{
+    uint particlesInIndex;
+    uint particlesUniqueIndex;
+    uint particlesOutIndex;
+    uint particlesEndIndex;
+
+    uint sharedInIndex;
+    uint sharedOutIndex;
+
+    uint trianglesStartIndex;
+    uint trianglesEndIndex;
+};
+
 struct CompressedDistanceConstraint
 {
     uint packedIndices;

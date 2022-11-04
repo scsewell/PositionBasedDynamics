@@ -8,11 +8,6 @@ namespace Scsewell.PositionBasedDynamics
     public static class Constants
     {
         /// <summary>
-        /// The maximum number of particles per cloth instance.
-        /// </summary>
-        public const int maxParticlesPerCloth = 2048;
-        
-        /// <summary>
         /// The maximum number of distance batches per cloth instance.
         /// </summary>
         public const int maxConstraintBatches = 12;

@@ -12,8 +12,17 @@
 #define SHARED_MEMORY_SIZE      ((32 * 1024) / 4)
 #define SHARED_PARTICLES_COUNT  (THREAD_GROUP_SIZE * PARTICLES_PER_THREAD)
 
+groupshared float gs_InverseMasses[SHARED_PARTICLES_COUNT];
 groupshared float3 gs_CurrPositions[SHARED_PARTICLES_COUNT];
 groupshared float3 gs_PrevPositions[SHARED_PARTICLES_COUNT];
+
+void StoreInverseMass(uint index, float inverseMass)
+{
+    if (index < SHARED_PARTICLES_COUNT)
+    {
+        gs_InverseMasses[index] = inverseMass;
+    }
+}
 
 void StoreCurrPosition(uint index, float3 position)
 {
@@ -31,6 +40,11 @@ void StorePrevPosition(uint index, float3 position)
     }
 }
 
+float LoadInverseMass(uint index)
+{
+    return gs_InverseMasses[index];
+}
+
 float3 LoadCurrPosition(uint index)
 {
     return gs_CurrPositions[index];
@@ -41,14 +55,21 @@ float3 LoadPrevPosition(uint index)
     return gs_PrevPositions[index];
 }
 
-void Integrate(inout float3 currentPosition, inout float3 previousPosition, float inverseMass)
+void LoadParicle(uint index, out float3 currPos, out float3 prevPos, out float inverseMass)
 {
-    float3 posDeltaFromVelocity = currentPosition - previousPosition;
+	inverseMass = _InverseMasses[index];
+    currPos = _CurrentPositions[index].xyz;
+    prevPos = _PreviousPositions[index].xyz;
+}
+
+void Integrate(inout float3 currPos, inout float3 prevPos, float inverseMass)
+{
+    float3 posDeltaFromVelocity = currPos - prevPos;
     float3 posDeltaFromAccelration = _Gravity * _SubStepDeltaTime * _SubStepDeltaTime;
     float3 posDelta = posDeltaFromVelocity + posDeltaFromAccelration;
     
-    previousPosition = currentPosition;
-    currentPosition += inverseMass * posDelta;
+    prevPos = currPos;
+    currPos += inverseMass * posDelta;
 }
 
 void SolveDistanceConstraints(uint threadID, uint localID, uint groupID)
@@ -67,8 +88,8 @@ void SolveDistanceConstraints(uint threadID, uint localID, uint groupID)
         
         DistanceConstraint constraint = LoadDistanceConstraint(threadID, batchOffset);
 
-        float w0 = _InverseMasses[constraint.indices.x];
-        float w1 = _InverseMasses[constraint.indices.y];
+        float w0 = LoadInverseMass(constraint.indices.x);
+        float w1 = LoadInverseMass(constraint.indices.y);
         float3 p0 = LoadCurrPosition(constraint.indices.x);
         float3 p1 = LoadCurrPosition(constraint.indices.y);
         
@@ -93,6 +114,47 @@ void SolveDistanceConstraints(uint threadID, uint localID, uint groupID)
         GroupMemoryBarrierWithGroupSync();
     }
 }
+
+void StoreBoundaryParticle(GroupData group, uint index)
+{
+	if (group.particlesInIndex <= index && index < group.particlesUniqueIndex)
+	{
+		uint sharedIndex = sharedInIndex + (index - group.particlesInIndex);
+
+		_SharedCurrentPositions[(2 * sharedIndex) + 0].xyz = LoadCurrPos(index);
+		_SharedPreviousPositions[(2 * sharedIndex) + 0].xyz = LoadPrevPos(index);
+	}
+	else if (group.particlesOutIndex <= index && index < group.particlesEndIndex)
+	{
+		uint sharedIndex = sharedOutIndex + (index - group.particlesOutIndex);
+
+		_SharedCurrentPositions[(2 * sharedIndex) + 1].xyz = LoadCurrPos(index);
+		_SharedPreviousPositions[(2 * sharedIndex) + 1].xyz = LoadPrevPos(index);
+	}
+
+    DeviceMemoryBarrierWithGroupSync();
+}
+
+void SolveBoundaryParticle(GroupData group, uint index)
+{
+	if (group.particlesInIndex <= index && index < group.particlesUniqueIndex)
+	{
+		uint sharedIndex = sharedInIndex + (index - group.particlesInIndex);
+
+		_SharedCurrentPositions[(2 * sharedIndex) + 0].xyz = LoadCurrPos(index);
+		_SharedPreviousPositions[(2 * sharedIndex) + 0].xyz = LoadPrevPos(index);
+	}
+	else if (group.particlesOutIndex <= index && index < group.particlesEndIndex)
+	{
+		uint sharedIndex = sharedOutIndex + (index - group.particlesOutIndex);
+
+		_SharedCurrentPositions[(2 * sharedIndex) + 1].xyz = LoadCurrPos(index);
+		_SharedPreviousPositions[(2 * sharedIndex) + 1].xyz = LoadPrevPos(index);
+	}
+
+    DeviceMemoryBarrierWithGroupSync();
+}
+
 
 void SumTriangleNormals(uint triangleIndex)
 {
@@ -119,6 +181,7 @@ void SumTriangleNormals(uint triangleIndex)
 void SumTriangleNormals(uint threadID, uint localID, uint groupID)
 {
     // TODO: graph coloring to avoid atomics?
+	// Alternatively use vertex fans 
     UNITY_UNROLL
     for (uint p = 0; p < PARTICLES_PER_THREAD; p++)
     {
@@ -140,71 +203,65 @@ void SumTriangleNormals(uint threadID, uint localID, uint groupID)
         SumTriangleNormals(index);
     }
     
-    DeviceMemoryBarrierWithGroupSync(); 
+	// todo make this not require device barrier 
+    DeviceMemoryBarrierWithGroupSync();
 }
 
-void StoreMeshVertex(uint index, float3 position, float3 normal)
+void StoreParicle(GroupData group, uint index, float3 currPos, float3 prevPos)
 {
+    float3 normalSum = asfloat(_Normals[index]);
+    float3 normal = normalize(normalSum);
     uint byteAddress = 3 * 4 * index;
-    _MeshPositions.Store3(byteAddress, asuint(position));
-    _MeshNormals.Store3(byteAddress, asuint(normal));
+    
+    if (index < group.particlesEndIndex)
+    {
+        _CurrentPositions[index].xyz = currPos;
+        _PreviousPositions[index].xyz = prevPos;
+    	_MeshPositions.Store3(byteAddress, asuint(currPos));
+    	_MeshNormals.Store3(byteAddress, asuint(normal));
+    }
 }
 
 [numthreads(THREAD_GROUP_SIZE, 1, 1)]
 void CSMain(uint threadID : SV_DispatchThreadID, uint localID : SV_GroupThreadID, uint groupID : SV_GroupID)
 {
-    UNITY_UNROLL
-    for (uint p = 0; p < PARTICLES_PER_THREAD; p++)
-    {
-        uint index = (2 * threadID) + p;
+	GroupData group = _Groups[groupID];
 
-        StoreCurrPosition(index, _CurrentPositions[index].xyz);
-        StorePrevPosition(index, _PreviousPositions[index].xyz);
-    }
-    
+	uint i0 = (2 * threadID) + 0;
+	uint i1 = (2 * threadID) + 1;
+	
+    float3 currPos0, currPos1;
+    float3 prevPos0, prevPos1;
+	float w0, w1;
+
+    LoadParicle(i0, currPos0, prevPos0, w0);
+    LoadParicle(i1, currPos1, prevPos1, w1);
+
+	StoreInverseMass(i0, w0);
+	StoreInverseMass(i1, w1);
+
     for (uint i = 0; i < _SubStepCount; i++)
     {
-        UNITY_UNROLL
-        for (uint p = 0; p < PARTICLES_PER_THREAD; p++)
-        {
-            uint index = (2 * threadID) + p;
-
-            float inverseMass = _InverseMasses[index];
-            float3 currPos = LoadCurrPosition(index);
-            float3 prevPos = LoadPrevPosition(index);
+        Integrate(currPos0, prevPos0, w0);
+        Integrate(currPos1, prevPos1, w1);
         
-            Integrate(currPos, prevPos, inverseMass);
-            
-            StoreCurrPosition(index, currPos);
-            StorePrevPosition(index, prevPos);
-        }
+        StoreCurrPosition(i0, currPos0);
+        StoreCurrPosition(i1, currPos1);
 
-        // TODO: may need to write more positions per thread if there are more positions allowed
-        // I suppose we can write the positions to global memory, then each group loads all into LDS
         GroupMemoryBarrierWithGroupSync();
 
         SolveDistanceConstraints(threadID, localID, groupID);
+
+        currPos0 = LoadCurrPosition(i0);
+        currPos1 = LoadCurrPosition(i1);
+
+		if ()
+    	{
+        }
     }
 
     SumTriangleNormals(threadID, localID, groupID);
     
-    UNITY_UNROLL
-    for (uint p = 0; p < PARTICLES_PER_THREAD; p++)
-    {
-        uint index = (2 * threadID) + p;
-
-        float3 currPos = LoadCurrPosition(index);
-        float3 prevPos = LoadPrevPosition(index);
-
-        float3 normalSum = asfloat(_Normals[index]);
-        float3 normal = normalize(normalSum);
-        
-        if (index < _ParticleCount)
-        {
-            _CurrentPositions[index].xyz = currPos;
-            _PreviousPositions[index].xyz = prevPos;
-
-            StoreMeshVertex(index, currPos, normal);
-        }
-    }
+	StoreParicle(group, i0, currPos0, prevPos0);
+	StoreParicle(group, i1, currPos1, prevPos1);
 }
