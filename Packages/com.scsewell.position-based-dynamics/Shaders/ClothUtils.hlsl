@@ -7,18 +7,9 @@ struct DistanceConstraint
     float restLength;
 };
 
-DistanceConstraint LoadDistanceConstraint(uint index, uint batchOffset, uint batchSize)
+DistanceConstraint LoadDistanceConstraint(uint index, uint batchOffset)
 {
-    CompressedDistanceConstraint compressedConstraint;
-    
-    if (index < batchSize)
-    {
-        compressedConstraint = _DistanceConstraints[batchOffset + index];
-    }
-    else
-    {
-        compressedConstraint = (CompressedDistanceConstraint)0;
-    }
+    CompressedDistanceConstraint compressedConstraint = _DistanceConstraints[batchOffset + index];
 
     DistanceConstraint constraint;
     constraint.indices.x = compressedConstraint.packedIndices & 0x0000FFFF;
@@ -32,12 +23,12 @@ uint3 LoadTriangle(uint index)
     // The index buffer uses 16-bit integers, but we can only load on 4 byte boundaries.
     // We must read 4 indices and select the three that belong to the requested triangle.
     uint offset = (3 * index) / 2;
-    uint2 packedIndices = index < _TriangleCount ? _MeshIndices.Load2(4 * offset) : 0;
+    uint2 packedIndices = _MeshIndices.Load2(4 * offset);
 
     uint4 indices;
-    indices.x = packedIndices.x & 0x0000FFFF;
+    indices.x = packedIndices.x & 0xFFFF;
     indices.y = packedIndices.x >> 16;
-    indices.z = packedIndices.y & 0x0000FFFF;
+    indices.z = packedIndices.y & 0xFFFF;
     indices.w = packedIndices.y >> 16;
 
     return index % 2 == 0 ? indices.xyz : indices.yzw;

@@ -8,45 +8,51 @@
 
 // TODO: decrease size? would need to use global memory to share results,
 // or ensure groups are entirely separate chunks of verts/tris (how to handle overlap?)
-#define THREAD_GROUP_SIZE   1024
-#define SHARED_MEMORY_SIZE  32 * 1024
+#define THREAD_GROUP_SIZE       1024
+#define SHARED_MEMORY_SIZE      ((32 * 1024) / 4)
+#define MAX_SHARED_POSITIONS    (SHARED_MEMORY_SIZE / 3)
+#define CURR_POSITIONS_OFFSET   0
+#define PREV_POSITIONS_OFFSET   (MAX_SHARED_POSITIONS / 2)
 
-//groupshared uint gs_Data[SHARED_MEMORY_SIZE];
-groupshared float3 gs_Data[SHARED_MEMORY_SIZE / 12];
+groupshared uint gs_Data[SHARED_MEMORY_SIZE];
 
-struct Particle
+void StorePosition(uint index, float3 position)
 {
-    float inverseMass;
-    float3 currentPosition;
-    float3 previousPosition;
-};
-
-struct CompressedPosition
-{
-    uint2 packedData;
-};
-
-CompressedPosition CompressPosition(float3 position, uint bit)
-{
-    
+    gs_Data[(3 * index) + 0] = asuint(position.x);
+    gs_Data[(3 * index) + 1] = asuint(position.y);
+    gs_Data[(3 * index) + 2] = asuint(position.z);
 }
 
-float3 DecompressPosition(CompressedPosition compressedPosition, out uint bit)
+float3 LoadPosition(uint index)
 {
-    
+    uint3 position;
+    position.x = gs_Data[(3 * index) + 0];
+    position.y = gs_Data[(3 * index) + 1];
+    position.z = gs_Data[(3 * index) + 2];
+    return asfloat(position);
 }
 
-struct CompressedParticle
+void StoreCurrPosition(uint index, float3 position)
 {
-    uint currentPosition;
-    uint previousPosition;
-};
-
-Particle DecompressParticle(CompressedParticle compressedParticle)
-{
-    
+    StorePosition(CURR_POSITIONS_OFFSET + index, position);
 }
 
+void StorePrevPosition(uint index, float3 position)
+{
+    StorePosition(PREV_POSITIONS_OFFSET + index, position);
+}
+
+float3 LoadCurrPosition(uint index)
+{
+    return LoadPosition(CURR_POSITIONS_OFFSET + index);
+}
+
+float3 LoadPrevPosition(uint index)
+{
+    return LoadPosition(PREV_POSITIONS_OFFSET + index);
+}
+
+/*
 Particle LoadParticleGlobal(uint index)
 {
     bool isValid = index < _ParticleCount;
@@ -93,19 +99,16 @@ void StoreParticleLocal(uint index, Particle particle)
         gs_Data[(SHARED_MEMORY_SIZE / 24) + index] = data1;
     }
 }
+*/
 
-void Integrate(inout Particle particle)
+void Integrate(inout float3 currentPosition, inout float3 previousPosition, float inverseMass)
 {
-    float3 posDeltaFromVelocity = particle.currentPosition - particle.previousPosition;
+    float3 posDeltaFromVelocity = currentPosition - previousPosition;
     float3 posDeltaFromAccelration = _Gravity * _SubStepDeltaTime * _SubStepDeltaTime;
     float3 posDelta = posDeltaFromVelocity + posDeltaFromAccelration;
     
-    particle.previousPosition = particle.currentPosition;
-    
-    if (particle.inverseMass > 0.5)
-    {
-        particle.currentPosition += posDelta;
-    }
+    previousPosition = currentPosition;
+    currentPosition += inverseMass * posDelta;
 }
 
 void SolveDistanceConstraints(uint threadID, uint localID, uint groupID)
@@ -122,26 +125,29 @@ void SolveDistanceConstraints(uint threadID, uint localID, uint groupID)
         uint batchSize = batchData.y;
         float compliance = asfloat(batchData.z);
         
-        DistanceConstraint constraint = LoadDistanceConstraint(threadID, batchOffset, batchSize);
-        Particle p0 = LoadParticleLocal(constraint.indices.x);
-        Particle p1 = LoadParticleLocal(constraint.indices.y);
+        DistanceConstraint constraint = LoadDistanceConstraint(threadID, batchOffset);
 
-        float3 disp = p0.currentPosition - p1.currentPosition;
+        float w0 = _InverseMasses[constraint.indices.x];
+        float w1 = _InverseMasses[constraint.indices.y];
+        float3 p0 = LoadCurrPosition(constraint.indices.x);
+        float3 p1 = LoadCurrPosition(constraint.indices.y);
+
+        float3 disp = p0 - p1;
         float len = length(disp);
         float3 dir = len != 0 ? disp / len : 0;
         
         float c = len - constraint.restLength;
         float alpha = compliance / (_SubStepDeltaTime * _SubStepDeltaTime);
-        float w = p0.inverseMass + p1.inverseMass;
+        float w = w0 + w1;
         float s = -c / (w + alpha);
         
-        p0.currentPosition += dir * (s * p0.inverseMass);
-        p1.currentPosition += dir * (-s * p1.inverseMass);
+        p0 += dir * (s * w0);
+        p1 -= dir * (s * w1);
         
         if (threadID < batchSize)
         {
-            StoreParticleLocal(constraint.indices.x, p0);
-            StoreParticleLocal(constraint.indices.y, p1);
+            StoreCurrPosition(constraint.indices.x, p0);
+            StoreCurrPosition(constraint.indices.y, p1);
         }
         
         GroupMemoryBarrierWithGroupSync();
@@ -150,14 +156,13 @@ void SolveDistanceConstraints(uint threadID, uint localID, uint groupID)
 
 void SumTriangleNormals(uint triangleIndex)
 {
-    // TODO: use groupshared memory for positions
     // TODO: consider groupshared memory for normals?
     // TODO: compress normals
     uint3 tri = LoadTriangle(triangleIndex);
 
-    float3 p0 = _CurrentPositions[tri.x];
-    float3 p1 = _CurrentPositions[tri.y];
-    float3 p2 = _CurrentPositions[tri.z];
+    float3 p0 = LoadCurrPosition(tri.x);
+    float3 p1 = LoadCurrPosition(tri.y);
+    float3 p2 = LoadCurrPosition(tri.z);
 
     float3 normal = normalize(cross(p1 - p0, p2 - p0));
     
@@ -173,6 +178,7 @@ void SumTriangleNormals(uint triangleIndex)
 
 void SumTriangleNormals(uint threadID, uint localID, uint groupID)
 {
+    // TODO: graph coloring to avoid atomics?
     UNITY_UNROLL
     for (uint p = 0; p < PARTICLES_PER_THREAD; p++)
     {
@@ -197,20 +203,11 @@ void SumTriangleNormals(uint threadID, uint localID, uint groupID)
     DeviceMemoryBarrierWithGroupSync(); 
 }
 
-void UpdateMeshParticle(uint index, Particle particle)
+void StoreMeshVertex(uint index, float3 position, float3 normal)
 {
     uint byteAddress = 3 * 4 * index;
-
-    // todo: use groupshared?
-    float3 position = particle.currentPosition;
-    float3 normalSum = index < _ParticleCount ? asfloat(_Normals[index]) : 0;
-    float3 normal = normalize(normalSum);
-    
-    if (index < _ParticleCount)
-    {
-        _MeshPositions.Store3(byteAddress, asuint(position));
-        _MeshNormals.Store3(byteAddress, asuint(normal));
-    }
+    _MeshPositions.Store3(byteAddress, asuint(position));
+    _MeshNormals.Store3(byteAddress, asuint(normal));
 }
 
 [numthreads(THREAD_GROUP_SIZE, 1, 1)]
@@ -221,7 +218,8 @@ void CSMain(uint threadID : SV_DispatchThreadID, uint localID : SV_GroupThreadID
     {
         uint index = (2 * threadID) + p;
         
-        StoreParticleLocal(index, LoadParticleGlobal(index));
+        StoreCurrPosition(index, _CurrentPositions[index].xyz);
+        StorePrevPosition(index, _PreviousPositions[index].xyz);
     }
 
     for (uint i = 0; i < _SubStepCount; i++)
@@ -231,9 +229,14 @@ void CSMain(uint threadID : SV_DispatchThreadID, uint localID : SV_GroupThreadID
         {
             uint index = (2 * threadID) + p;
 
-            Particle particle = LoadParticleLocal(index);
-            Integrate(particle);
-            StoreParticleLocal(index, particle);
+            float inverseMass = _InverseMasses[index];
+            float3 currPos = LoadCurrPosition(index);
+            float3 prevPos = LoadPrevPosition(index);
+        
+            Integrate(currPos, prevPos, inverseMass);
+            
+            StoreCurrPosition(index, currPos);
+            StorePrevPosition(index, prevPos);
         }
 
         // TODO: may need to write more positions per thread if there are more positions allowed
@@ -249,9 +252,19 @@ void CSMain(uint threadID : SV_DispatchThreadID, uint localID : SV_GroupThreadID
     for (uint p = 0; p < PARTICLES_PER_THREAD; p++)
     {
         uint index = (2 * threadID) + p;
+
+        float3 currPos = LoadCurrPosition(index);
+        float3 prevPos = LoadPrevPosition(index);
+
+        float3 normalSum = asfloat(_Normals[index]);
+        float3 normal = normalize(normalSum);
         
-        Particle particle = LoadParticleLocal(index);
-        StoreParticleGlobal(index, particle);
-        UpdateMeshParticle(index, particle);
+        if (threadID < _ParticleCount)
+        {
+            _CurrentPositions[index].xyz = currPos;
+            _PreviousPositions[index].xyz = prevPos;
+
+            StoreMeshVertex(index, currPos, normal);
+        }
     }
 }
