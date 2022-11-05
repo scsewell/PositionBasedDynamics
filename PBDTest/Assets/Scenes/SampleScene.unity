@@ -246,7 +246,7 @@ MonoBehaviour:
   onValueChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_IsOn: 1
+  m_IsOn: 0
 --- !u!1 &316358262
 GameObject:
   m_ObjectHideFlags: 0
@@ -348,7 +348,7 @@ MonoBehaviour:
   m_shearCompliance: 0.25
   m_bendingCompliance: 0.25
   m_hang: 1
-  m_jitter: 0
+  m_jitter: 1
   m_gravity: {x: 0, y: -9.81, z: 0}
   m_debug: 0
 --- !u!4 &358940751

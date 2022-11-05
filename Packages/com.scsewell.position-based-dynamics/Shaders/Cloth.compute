@@ -8,18 +8,18 @@
 
 // TODO: decrease size? would need to use global memory to share results,
 // or ensure groups are entirely separate chunks of verts/tris (how to handle overlap?)
-#define THREAD_GROUP_SIZE       512
+#define THREAD_GROUP_SIZE       1024
 #define SHARED_MEMORY_SIZE      ((32 * 1024) / 4)
-#define SHARED_PARTICLES_COUNT  (THREAD_GROUP_SIZE * PARTICLES_PER_THREAD)
+#define SHARED_PARTICLES_COUNT  (SHARED_MEMORY_SIZE / 6)
 
 groupshared float3 gs_CurrPositions[SHARED_PARTICLES_COUNT];
 groupshared float3 gs_PrevPositions[SHARED_PARTICLES_COUNT];
 
-void StoreCurrPosition(uint index, float3 position)
+void StoreCurrPosition(uint index, float3 position, float invMass)
 {
     if (index < SHARED_PARTICLES_COUNT)
     {
-        gs_CurrPositions[index] = position;
+        gs_CurrPositions[index] = asfloat((asuint(position) & ~0x1) | uint(invMass));
     }
 }
 
@@ -27,13 +27,21 @@ void StorePrevPosition(uint index, float3 position)
 {
     if (index < SHARED_PARTICLES_COUNT)
     {
-        gs_PrevPositions[index] = position;
+       	gs_PrevPositions[index] = position;
     }
+}
+
+float3 LoadCurrPosition(uint index, out float invMass)
+{
+	float3 position = gs_CurrPositions[index];
+	invMass = asuint(position) & 0x1;
+    return position;
 }
 
 float3 LoadCurrPosition(uint index)
 {
-    return gs_CurrPositions[index];
+	float invMass;
+    return LoadCurrPosition(index, invMass);
 }
 
 float3 LoadPrevPosition(uint index)
@@ -41,14 +49,88 @@ float3 LoadPrevPosition(uint index)
     return gs_PrevPositions[index];
 }
 
-void Integrate(inout float3 currentPosition, inout float3 previousPosition, float inverseMass)
+void LoadParicle(uint index, out NeighbourFan fan, out float invMass, out float3 currPos, out float3 prevPos)
 {
-    float3 posDeltaFromVelocity = currentPosition - previousPosition;
-    float3 posDeltaFromAccelration = _Gravity * _SubStepDeltaTime * _SubStepDeltaTime;
-    float3 posDelta = posDeltaFromVelocity + posDeltaFromAccelration;
+	fan = LoadNeighbourFan(index);
+    invMass = _InverseMasses[index];
+    currPos = _CurrentPositions[index].xyz;
+    prevPos = _PreviousPositions[index].xyz;
+}
+
+void StoreParticle(uint index, float3 currPos, float3 prevPos)
+{
+    if (index < _ParticleCount)
+    {
+        _CurrentPositions[index].xyz = currPos;
+        _PreviousPositions[index].xyz = prevPos;
+    }
+}
+
+void StoreVertex(uint index, float3 position, float3 normal)
+{
+    uint byteAddress = 3 * 4 * index;
+
+    if (index < _ParticleCount)
+    {
+    	_MeshPositions.Store3(byteAddress, asuint(position));
+    	_MeshNormals.Store3(byteAddress, asuint(normal));
+	}
+}
+
+void Integrate(inout float3 currPos, inout float3 prevPos, float invMass)
+{
+    float3 velocity = currPos - prevPos;
+    float3 accelration = _Gravity * _SubStepDeltaTime * _SubStepDeltaTime;
     
-    previousPosition = currentPosition;
-    currentPosition += inverseMass * posDelta;
+    prevPos = currPos;
+    currPos += invMass * (velocity + accelration);
+}
+
+void Aerodynamics(NeighbourFan fan, inout float3 currPos, float3 prevPos, float invMass)
+{
+    float3 fanCurrPos[MAX_FAN_BLADES_PER_PARTICLE];
+    float3 fanPrevPos[MAX_FAN_BLADES_PER_PARTICLE];
+
+    UNITY_UNROLL
+    for (uint i = 0; i < MAX_FAN_BLADES_PER_PARTICLE; i++)
+    {
+        fanCurrPos[i] = LoadCurrPosition(fan.indices[i]);
+        fanPrevPos[i] = LoadPrevPosition(fan.indices[i]);
+    }
+	
+    UNITY_UNROLL
+    for (uint j = 0; j < (MAX_FAN_BLADES_PER_PARTICLE - 1); j++)
+    {
+        if (fan.indices[j + 1] != INVALID_FAN_INDEX)
+        {
+            float3 c0 = currPos;
+			float3 c1 = fanCurrPos[j];
+			float3 c2 = fanCurrPos[j + 1];
+
+            float3 p0 = prevPos;
+			float3 p1 = fanPrevPos[j];
+			float3 p2 = fanPrevPos[j + 1];
+
+			float3 curr = (c0 + c1 + c2) / 3.0;
+			float3 prev = (p0 + p1 + p2) / 3.0;
+			float3 vAvg = curr - prev;
+
+			float3 vRel = vAvg - (_WindVelocity * _SubStepDeltaTime);
+			float vRel2 = dot(vRel, vRel);
+
+			float3 c = cross(c1 - c0, c2 - c0);
+			float doubleArea = length(c);
+			float area = 0.5 * doubleArea;
+			float3 normal = doubleArea > 0.0 ? (dot(c, vRel) > 0.0 ? c : -c) / doubleArea : 0.0;
+
+			// https://media.disneyanimation.com/uploads/production/publication_asset/115/asset/cloth_hair_wind.pdf
+			float3 drag = (_DragCoefficient - _LiftCoefficient) * dot(vRel, normal) * vRel;
+			float3 lift = _LiftCoefficient * vRel2 * normal;
+			float3 impulse = 0.5 * _AirDensity * area * (drag + lift);
+
+            currPos += invMass * impulse;
+        }
+    }
 }
 
 void SolveDistanceConstraints(uint threadID, uint localID, uint groupID)
@@ -65,16 +147,15 @@ void SolveDistanceConstraints(uint threadID, uint localID, uint groupID)
         uint batchSize = batchData.y;
         float compliance = asfloat(batchData.z);
         
-        DistanceConstraint constraint = LoadDistanceConstraint(threadID, batchOffset);
+        DistanceConstraint constraint = LoadDistanceConstraint(localID, batchOffset);
 
-        float w0 = _InverseMasses[constraint.indices.x];
-        float w1 = _InverseMasses[constraint.indices.y];
-        float3 p0 = LoadCurrPosition(constraint.indices.x);
-        float3 p1 = LoadCurrPosition(constraint.indices.y);
+        float w0, w1;
+        float3 p0 = LoadCurrPosition(constraint.indices.x, w0);
+        float3 p1 = LoadCurrPosition(constraint.indices.y, w1);
         
         float3 disp = p0 - p1;
         float len = length(disp);
-        float3 dir = len != 0 ? disp / len : 0;
+        float3 dir = len > 0.0 ? disp / len : 0.0;
         
         float c = len - constraint.restLength;
         float alpha = compliance / (_SubStepDeltaTime * _SubStepDeltaTime);
@@ -84,127 +165,88 @@ void SolveDistanceConstraints(uint threadID, uint localID, uint groupID)
         p0 += dir * (s * w0);
         p1 -= dir * (s * w1);
         
-        if (threadID < batchSize)
+        if (localID < batchSize)
         {
-            StoreCurrPosition(constraint.indices.x, p0);
-            StoreCurrPosition(constraint.indices.y, p1);
+            StoreCurrPosition(constraint.indices.x, p0, w0);
+            StoreCurrPosition(constraint.indices.y, p1, w1);
         }
         
         GroupMemoryBarrierWithGroupSync();
     }
 }
 
-void SumTriangleNormals(uint triangleIndex)
+float3 ComputeNormal(NeighbourFan fan, float3 currPos)
 {
-    // TODO: consider groupshared memory for normals?
-    // TODO: compress normals
-    uint3 tri = LoadTriangle(triangleIndex);
+    float3 fanBlades[MAX_FAN_BLADES_PER_PARTICLE];
 
-    float3 p0 = LoadCurrPosition(tri.x);
-    float3 p1 = LoadCurrPosition(tri.y);
-    float3 p2 = LoadCurrPosition(tri.z);
-
-    float3 normal = normalize(cross(p1 - p0, p2 - p0));
-    
-    uint seed = tri.x + tri.y + tri.z;
-
-    if (triangleIndex < _TriangleCount)
-    {
-        AtomicAdd(_Normals, tri.x, normal, seed);
-        AtomicAdd(_Normals, tri.y, normal, seed);
-        AtomicAdd(_Normals, tri.z, normal, seed);
-    }
-}
-
-void SumTriangleNormals(uint threadID, uint localID, uint groupID)
-{
-    // TODO: graph coloring to avoid atomics?
     UNITY_UNROLL
-    for (uint p = 0; p < PARTICLES_PER_THREAD; p++)
+    for (uint i = 0; i < MAX_FAN_BLADES_PER_PARTICLE; i++)
     {
-        uint index = (2 * threadID) + p;
-        
-        _Normals[index] = asuint(float4(0, 0, 0, 0));
+        fanBlades[i] = LoadCurrPosition(fan.indices[i]) - currPos;
     }
-    
-    DeviceMemoryBarrierWithGroupSync(); 
 
-    uint totalThreads = THREAD_GROUP_SIZE * _ThreadGroupCount;
+    float3 normal = cross(fanBlades[0], fanBlades[1]);
 
-    //uint trianglesPerThread = _TriangleCount / (THREAD_GROUP_SIZE * _ThreadGroupCount);
-    uint trianglesPerThread = ((_TriangleCount - 1) / totalThreads) + 1;
-    
-    for (uint i = 0; i < trianglesPerThread; i++)
+    UNITY_UNROLL
+    for (uint j = 1; j < (MAX_FAN_BLADES_PER_PARTICLE - 1); j++)
     {
-        uint index = (trianglesPerThread * ((THREAD_GROUP_SIZE * groupID) + threadID)) + i;
-        SumTriangleNormals(index);
+        if (fan.indices[j + 1] != INVALID_FAN_INDEX)
+        {
+            normal += cross(fanBlades[j], fanBlades[j + 1]);
+        }
     }
-    
-    DeviceMemoryBarrierWithGroupSync(); 
-}
 
-void StoreMeshVertex(uint index, float3 position, float3 normal)
-{
-    uint byteAddress = 3 * 4 * index;
-    _MeshPositions.Store3(byteAddress, asuint(position));
-    _MeshNormals.Store3(byteAddress, asuint(normal));
+    return normalize(normal);
 }
 
 [numthreads(THREAD_GROUP_SIZE, 1, 1)]
 void CSMain(uint threadID : SV_DispatchThreadID, uint localID : SV_GroupThreadID, uint groupID : SV_GroupID)
 {
-    UNITY_UNROLL
-    for (uint p = 0; p < PARTICLES_PER_THREAD; p++)
-    {
-        uint index = (2 * threadID) + p;
-
-        StoreCurrPosition(index, _CurrentPositions[index].xyz);
-        StorePrevPosition(index, _PreviousPositions[index].xyz);
-    }
+    uint i0 = (2 * localID) + 0;
+    uint i1 = (2 * localID) + 1;
     
+	NeighbourFan fan0, fan1;
+    float invMass0, invMass1;
+    float3 currPos0, currPos1;
+    float3 prevPos0, prevPos1;
+
+    LoadParicle(i0, fan0, invMass0, currPos0, prevPos0);
+    LoadParicle(i1, fan1, invMass1, currPos1, prevPos1);
+
     for (uint i = 0; i < _SubStepCount; i++)
     {
-        UNITY_UNROLL
-        for (uint p = 0; p < PARTICLES_PER_THREAD; p++)
-        {
-            uint index = (2 * threadID) + p;
+        Integrate(currPos0, prevPos0, invMass0);
+        Integrate(currPos1, prevPos1, invMass1);
 
-            float inverseMass = _InverseMasses[index];
-            float3 currPos = LoadCurrPosition(index);
-            float3 prevPos = LoadPrevPosition(index);
-        
-            Integrate(currPos, prevPos, inverseMass);
-            
-            StoreCurrPosition(index, currPos);
-            StorePrevPosition(index, prevPos);
-        }
+        StorePrevPosition(i0, currPos0);
+        StorePrevPosition(i1, currPos1);
+        StoreCurrPosition(i0, currPos0, invMass0);
+        StoreCurrPosition(i1, currPos1, invMass1);
 
-        // TODO: may need to write more positions per thread if there are more positions allowed
-        // I suppose we can write the positions to global memory, then each group loads all into LDS
+        GroupMemoryBarrierWithGroupSync();
+
+		Aerodynamics(fan0, currPos0, prevPos0, invMass0);
+		Aerodynamics(fan1, currPos1, prevPos1, invMass1);
+
+        GroupMemoryBarrierWithGroupSync();
+
+        StoreCurrPosition(i0, currPos0, invMass0);
+        StoreCurrPosition(i1, currPos1, invMass1);
+
         GroupMemoryBarrierWithGroupSync();
 
         SolveDistanceConstraints(threadID, localID, groupID);
+
+        currPos0 = LoadCurrPosition(i0);
+        currPos1 = LoadCurrPosition(i1);
     }
 
-    SumTriangleNormals(threadID, localID, groupID);
-    
-    UNITY_UNROLL
-    for (uint p = 0; p < PARTICLES_PER_THREAD; p++)
-    {
-        uint index = (2 * threadID) + p;
+	float3 normal0 = ComputeNormal(fan0, currPos0);
+	float3 normal1 = ComputeNormal(fan1, currPos1);
 
-        float3 currPos = LoadCurrPosition(index);
-        float3 prevPos = LoadPrevPosition(index);
+	StoreParticle(i0, currPos0, prevPos0);
+	StoreParticle(i1, currPos1, prevPos1);
 
-        float3 normalSum = asfloat(_Normals[index]);
-        float3 normal = normalize(normalSum);
-        
-        if (index < _ParticleCount)
-        {
-            _CurrentPositions[index].xyz = currPos;
-            _PreviousPositions[index].xyz = prevPos;
-
-            StoreMeshVertex(index, currPos, normal);
-        }
-    }
+	StoreVertex(i0, currPos0, normal0);
+	StoreVertex(i1, currPos1, normal1);
 }

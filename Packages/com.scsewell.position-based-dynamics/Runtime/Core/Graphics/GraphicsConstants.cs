@@ -18,9 +18,19 @@ namespace Scsewell.PositionBasedDynamics
         public const int maxConstraintBatches = 12;
         
         /// <summary>
+        /// The maximum number of particles in the neighbourhood of a particle.
+        /// </summary>
+        public const int maxFanBladesPerParticle = 8;
+
+        /// <summary>
         /// The number of particles processed per compute thread.
         /// </summary>
         internal const int particlesPerThread = 2;
+        
+        /// <summary>
+        /// The value used to represent an unused index in the neighbourhood of a particle.
+        /// </summary>
+        internal const ushort invalidFanIndex = 0xFFFF;
     }
 
     /// <summary>
@@ -34,8 +44,9 @@ namespace Scsewell.PositionBasedDynamics
             public static readonly int _ClothStaticPropertyBuffer = Shader.PropertyToID("ClothStaticPropertyBuffer");
             public static readonly int _ClothDynamicPropertyBuffer = Shader.PropertyToID("ClothDynamicPropertyBuffer");
 
-            public static readonly int _DistanceConstraints = Shader.PropertyToID("_DistanceConstraints");
             public static readonly int _InverseMasses = Shader.PropertyToID("_InverseMasses");
+            public static readonly int _NeighbourFanIndices = Shader.PropertyToID("_NeighbourFanIndices");
+            public static readonly int _DistanceConstraints = Shader.PropertyToID("_DistanceConstraints");
             
             public static readonly int _CurrentPositions = Shader.PropertyToID("_CurrentPositions");
             public static readonly int _PreviousPositions = Shader.PropertyToID("_PreviousPositions");
@@ -43,7 +54,6 @@ namespace Scsewell.PositionBasedDynamics
             
             public static readonly int _MeshPositions = Shader.PropertyToID("_MeshPositions");
             public static readonly int _MeshNormals = Shader.PropertyToID("_MeshNormals");
-            public static readonly int _MeshIndices = Shader.PropertyToID("_MeshIndices");
         }
     }
 

@@ -22,13 +22,12 @@ namespace Scsewell.PositionBasedDynamics
 
         fixed uint _ConstraintBatchData[4 * Constants.maxConstraintBatches];
         public uint _ParticleCount;
-        public uint _TriangleCount;
         public uint _ConstraintBatchCount;
-        public uint _ThreadGroupCount;
-        public float3 _BoundsMin;
-        uint _Padding0;
-        public float3 _BoundsMax;
-        uint _Padding1;
+        uint2 _Padding0;
+        public float4 _WindVelocity;
+        public float _AirDensity;
+        public float _LiftCoefficient;
+        public float _DragCoefficient;
 
         public void SetConstraintData(int index, uint batchOffset, uint batchSize, float compliance)
         {
