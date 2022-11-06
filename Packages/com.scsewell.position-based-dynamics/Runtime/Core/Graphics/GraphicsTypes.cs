@@ -23,10 +23,6 @@ namespace Scsewell.PositionBasedDynamics
         fixed uint _ConstraintBatchData[4 * Constants.maxConstraintBatches];
         public uint _ParticleCount;
         public uint _ConstraintBatchCount;
-        public float _LiftCoefficient;
-        public float _DragCoefficient;
-        public float _AirDensity;
-        public float3 _WindVelocity;
 
         public void SetConstraintData(int index, uint batchOffset, uint batchSize, float compliance)
         {
@@ -42,6 +38,10 @@ namespace Scsewell.PositionBasedDynamics
         internal static readonly int k_size = UnsafeUtility.SizeOf<ClothDynamicPropertyBuffer>();
 
         public float3 _Gravity;
+        public float _AirDensity;
+        public float3 _WindVelocity;
+        public float _LiftCoefficient;
+        public float _DragCoefficient;
     }
     
     [StructLayout(LayoutKind.Sequential)]

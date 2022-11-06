@@ -121,7 +121,7 @@ void Aerodynamics(NeighbourFan fan, inout float3 currPos, float3 prevPos, float 
 			float3 lift = _LiftCoefficient * vRel2 * normal;
 			float3 impulse = 0.5 * _AirDensity * area * (drag + lift);
 
-            currPos += invMass * impulse;
+            currPos -= invMass * impulse;
         }
     }
 }
@@ -153,7 +153,7 @@ void SolveDistanceConstraints(uint threadID, uint localID, uint groupID)
         float c = len - constraint.restLength;
         float alpha = compliance / (_SubStepDeltaTime * _SubStepDeltaTime);
         float w = w0 + w1;
-        float s = -c / (w + alpha);
+        float s = w > 0.0 ? -c / (w + alpha) : 0.0;
         
         p0 += dir * (s * w0);
         p1 -= dir * (s * w1);

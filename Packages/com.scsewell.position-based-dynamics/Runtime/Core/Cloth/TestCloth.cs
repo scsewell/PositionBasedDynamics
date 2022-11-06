@@ -61,6 +61,14 @@ namespace Scsewell.PositionBasedDynamics
         [SerializeField]
         Vector3 m_gravity = new Vector3(0, -9.81f, 0);
         [SerializeField]
+        Vector3 m_wind = new Vector3(0, 0, 0);
+        [SerializeField]
+        float m_airDensity = 1.225f;
+        [SerializeField]
+        float m_liftCoefficient = 1.0f;
+        [SerializeField]
+        float m_dragCoefficient = 2.0f;
+        [SerializeField]
         bool m_debug = false;
 
         bool m_resourcesCreated;
@@ -87,8 +95,20 @@ namespace Scsewell.PositionBasedDynamics
         public Bounds Bounds => m_bounds;
 
         /// <inheritdoc />
-        public float3 Gravity => m_gravity;
-        
+        public float3 Gravity => transform.InverseTransformVector(m_gravity);
+
+        /// <inheritdoc />
+        public float3 Wind => transform.InverseTransformVector(m_wind);
+
+        /// <inheritdoc />
+        public float AirDensity => m_airDensity;
+
+        /// <inheritdoc />
+        public float LiftCoefficient => m_liftCoefficient;
+
+        /// <inheritdoc />
+        public float DragCoefficient => m_dragCoefficient;
+
         /// <inheritdoc />
         public Matrix4x4 Transform => transform.localToWorldMatrix;
 
@@ -119,6 +139,8 @@ namespace Scsewell.PositionBasedDynamics
 
         void LateUpdate()
         {
+            m_dirtyFlags |= ClothDirtyFlags.Parameters;
+            
             if (m_resourcesDirty)
             {
                 CreateResources();
@@ -187,11 +209,14 @@ namespace Scsewell.PositionBasedDynamics
                     {
                         position += 0.001f * UnityEngine.Random.insideUnitSphere;
                     }
+
+                    //var pin = m_hang && j == (m_resY - 1) && (i == 0 || i == m_resX - 1);
+                    var pin = m_hang && (j == (m_resY - 1) || (j == 0 && (i == 0 || i == m_resX - 1)));
                     
                     m_particles[id] = new ClothParticle
                     {
                         restPosition = position,
-                        inverseMass = (m_hang && j == (m_resY - 1) && (i == 0 || i == m_resX - 1)) ? 0f : 1f,
+                        inverseMass = pin ? 0f : 1f,
                     };
                 }
             }

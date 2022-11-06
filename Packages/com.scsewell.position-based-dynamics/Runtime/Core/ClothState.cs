@@ -157,6 +157,10 @@ namespace Scsewell.PositionBasedDynamics
                 buffer[0] = new ClothDynamicPropertyBuffer
                 {
                     _Gravity = Cloth.Gravity,
+                    _WindVelocity = Cloth.Wind,
+                    _AirDensity = Cloth.AirDensity,
+                    _LiftCoefficient = Cloth.LiftCoefficient,
+                    _DragCoefficient = Cloth.DragCoefficient,
                 };
                 
                 m_dynamicPropertyBuffer.UnlockBufferAfterWrite<ClothDynamicPropertyBuffer>(1);
@@ -351,10 +355,6 @@ namespace Scsewell.PositionBasedDynamics
             {
                 _ParticleCount = (uint)m_particleCount,
                 _ConstraintBatchCount = (uint)constraintBatchCount,
-                _WindVelocity = math.float3(1f),
-                _AirDensity = 1.225f,
-                _LiftCoefficient = 1.0f,
-                _DragCoefficient = 1.5f,
             };
             
             var currentConstraint = 0;

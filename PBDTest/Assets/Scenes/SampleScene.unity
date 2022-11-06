@@ -337,9 +337,9 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   m_material: {fileID: 2100000, guid: c5003f9233cdd084a951cb84d0c584f6, type: 2}
-  m_resX: 30
-  m_resY: 30
-  m_spacing: 0.1
+  m_resX: 35
+  m_resY: 35
+  m_spacing: 0.3
   m_bounds:
     m_Center: {x: 0, y: 0, z: 0}
     m_Extent: {x: 10, y: 10, z: 10}
@@ -350,6 +350,10 @@ MonoBehaviour:
   m_hang: 1
   m_jitter: 1
   m_gravity: {x: 0, y: -9.81, z: 0}
+  m_wind: {x: 0, y: 0, z: 10}
+  m_airDensity: 1.225
+  m_liftCoefficient: 1
+  m_dragCoefficient: 4
   m_debug: 0
 --- !u!4 &358940751
 Transform:
@@ -958,7 +962,7 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 963194225}
   m_LocalRotation: {x: 0, y: 1, z: 0, w: 0}
-  m_LocalPosition: {x: 0, y: -0.5, z: 5}
+  m_LocalPosition: {x: 0, y: -0.5, z: 15}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []

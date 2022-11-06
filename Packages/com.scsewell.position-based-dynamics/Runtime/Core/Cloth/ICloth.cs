@@ -34,9 +34,9 @@ namespace Scsewell.PositionBasedDynamics
         Bounds = ClothState.DirtyFlags.StaticData,
 
         /// <summary>
-        /// The gravity acceleration was changed.
+        /// The simulation parameters was changed.
         /// </summary>
-        Gravity = ClothState.DirtyFlags.DynamicProperties,
+        Parameters = ClothState.DirtyFlags.DynamicProperties,
 
         /// <summary>
         /// Force a complete refresh of all data.
@@ -90,6 +90,26 @@ namespace Scsewell.PositionBasedDynamics
         /// The gravity to apply to the cloth.
         /// </summary>
         float3 Gravity { get; }
+
+        /// <summary>
+        /// The wind velocity.
+        /// </summary>
+        float3 Wind { get; }
+
+        /// <summary>
+        /// The air density coefficient.
+        /// </summary>
+        float AirDensity { get; }
+
+        /// <summary>
+        /// The lift coefficient.
+        /// </summary>
+        float LiftCoefficient { get; }
+
+        /// <summary>
+        /// The drag coefficient.
+        /// </summary>
+        float DragCoefficient { get; }
 
         /// <summary>
         /// The transform of the cloth.
