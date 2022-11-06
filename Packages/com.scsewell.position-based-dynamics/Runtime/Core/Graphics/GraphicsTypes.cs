@@ -23,11 +23,10 @@ namespace Scsewell.PositionBasedDynamics
         fixed uint _ConstraintBatchData[4 * Constants.maxConstraintBatches];
         public uint _ParticleCount;
         public uint _ConstraintBatchCount;
-        uint2 _Padding0;
-        public float4 _WindVelocity;
-        public float _AirDensity;
         public float _LiftCoefficient;
         public float _DragCoefficient;
+        public float _AirDensity;
+        public float3 _WindVelocity;
 
         public void SetConstraintData(int index, uint batchOffset, uint batchSize, float compliance)
         {
@@ -55,7 +54,7 @@ namespace Scsewell.PositionBasedDynamics
 
         public CompressedDistanceConstraint(int index0, int index1, float restLength)
         {
-            packedIndices =  (uint)((index0 & 0x0000FFFF) | (index1 << 16));
+            packedIndices =  (uint)((index0 & 0xFFFF) | (index1 << 16));
             this.restLength = restLength;
         }
     }

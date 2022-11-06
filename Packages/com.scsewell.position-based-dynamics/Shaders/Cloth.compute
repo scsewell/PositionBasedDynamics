@@ -88,28 +88,20 @@ void Integrate(inout float3 currPos, inout float3 prevPos, float invMass)
 
 void Aerodynamics(NeighbourFan fan, inout float3 currPos, float3 prevPos, float invMass)
 {
-    float3 fanCurrPos[MAX_FAN_BLADES_PER_PARTICLE];
-    float3 fanPrevPos[MAX_FAN_BLADES_PER_PARTICLE];
-
     UNITY_UNROLL
-    for (uint i = 0; i < MAX_FAN_BLADES_PER_PARTICLE; i++)
+    for (uint i1 = 0; i1 < MAX_TRIS_PER_PARTICLE; i1++)
     {
-        fanCurrPos[i] = LoadCurrPosition(fan.indices[i]);
-        fanPrevPos[i] = LoadPrevPosition(fan.indices[i]);
-    }
-	
-    UNITY_UNROLL
-    for (uint j = 0; j < (MAX_FAN_BLADES_PER_PARTICLE - 1); j++)
-    {
-        if (fan.indices[j + 1] != INVALID_FAN_INDEX)
+        if ((fan.indices[i1] & FILLED_FAN_BIT) == FILLED_FAN_BIT)
         {
+			uint i2 = (i1 + 1) % MAX_TRIS_PER_PARTICLE;
+
             float3 c0 = currPos;
-			float3 c1 = fanCurrPos[j];
-			float3 c2 = fanCurrPos[j + 1];
+			float3 c1 = LoadCurrPosition(fan.indices[i1] & ~FILLED_FAN_BIT);
+			float3 c2 = LoadCurrPosition(fan.indices[i2] & ~FILLED_FAN_BIT);
 
             float3 p0 = prevPos;
-			float3 p1 = fanPrevPos[j];
-			float3 p2 = fanPrevPos[j + 1];
+			float3 p1 = LoadPrevPosition(fan.indices[i1] & ~FILLED_FAN_BIT);
+			float3 p2 = LoadPrevPosition(fan.indices[i2] & ~FILLED_FAN_BIT);
 
 			float3 curr = (c0 + c1 + c2) / 3.0;
 			float3 prev = (p0 + p1 + p2) / 3.0;
@@ -121,7 +113,8 @@ void Aerodynamics(NeighbourFan fan, inout float3 currPos, float3 prevPos, float 
 			float3 c = cross(c1 - c0, c2 - c0);
 			float doubleArea = length(c);
 			float area = 0.5 * doubleArea;
-			float3 normal = doubleArea > 0.0 ? (dot(c, vRel) > 0.0 ? c : -c) / doubleArea : 0.0;
+			float3 n = dot(c, vRel) > 0.0 ? c : -c;
+			float3 normal = doubleArea > 0.0 ? n / doubleArea : 0.0;
 
 			// https://media.disneyanimation.com/uploads/production/publication_asset/115/asset/cloth_hair_wind.pdf
 			float3 drag = (_DragCoefficient - _LiftCoefficient) * dot(vRel, normal) * vRel;
@@ -177,22 +170,24 @@ void SolveDistanceConstraints(uint threadID, uint localID, uint groupID)
 
 float3 ComputeNormal(NeighbourFan fan, float3 currPos)
 {
-    float3 fanBlades[MAX_FAN_BLADES_PER_PARTICLE];
+    float3 fanBlades[MAX_TRIS_PER_PARTICLE];
 
     UNITY_UNROLL
-    for (uint i = 0; i < MAX_FAN_BLADES_PER_PARTICLE; i++)
+    for (uint i = 0; i < MAX_TRIS_PER_PARTICLE; i++)
     {
-        fanBlades[i] = LoadCurrPosition(fan.indices[i]) - currPos;
+        fanBlades[i] = LoadCurrPosition(fan.indices[i] & ~FILLED_FAN_BIT) - currPos;
     }
 
     float3 normal = cross(fanBlades[0], fanBlades[1]);
 
     UNITY_UNROLL
-    for (uint j = 1; j < (MAX_FAN_BLADES_PER_PARTICLE - 1); j++)
+    for (uint j1 = 1; j1 < MAX_TRIS_PER_PARTICLE; j1++)
     {
-        if (fan.indices[j + 1] != INVALID_FAN_INDEX)
+        if ((fan.indices[j1] & FILLED_FAN_BIT) == FILLED_FAN_BIT)
         {
-            normal += cross(fanBlades[j], fanBlades[j + 1]);
+			uint j2 = (j1 + 1) % MAX_TRIS_PER_PARTICLE;
+
+            normal += cross(fanBlades[j1], fanBlades[j2]);
         }
     }
 

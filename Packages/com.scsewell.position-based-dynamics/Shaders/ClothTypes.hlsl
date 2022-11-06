@@ -17,10 +17,10 @@ CBUFFER_START(ClothStaticPropertyBuffer)
 uint4 _ConstraintBatchData[MAX_CONSTRAINT_BATCHES];
 uint _ParticleCount;
 uint _ConstraintBatchCount;
-float4 _WindVelocity;
-float _AirDensity;
 float _LiftCoefficient;
 float _DragCoefficient;
+float _AirDensity;
+float3 _WindVelocity;
 CBUFFER_END
 
 CBUFFER_START(ClothDynamicPropertyBuffer)

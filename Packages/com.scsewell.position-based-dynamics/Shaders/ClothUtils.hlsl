@@ -3,7 +3,7 @@
 
 struct NeighbourFan
 {
-	uint indices[MAX_FAN_BLADES_PER_PARTICLE];
+	uint indices[MAX_TRIS_PER_PARTICLE];
 };
 
 struct DistanceConstraint
@@ -14,7 +14,7 @@ struct DistanceConstraint
 
 NeighbourFan LoadNeighbourFan(uint index)
 {
-	uint4 packedIndices = _NeighbourFanIndices[index];
+	uint3 packedIndices = _NeighbourFanIndices[index];
 
 	NeighbourFan fan;
 	fan.indices[0] = packedIndices.x & 0xFFFF;
@@ -23,8 +23,6 @@ NeighbourFan LoadNeighbourFan(uint index)
 	fan.indices[3] = packedIndices.y >> 16;
 	fan.indices[4] = packedIndices.z & 0xFFFF;
 	fan.indices[5] = packedIndices.z >> 16;
-	fan.indices[6] = packedIndices.w & 0xFFFF;
-	fan.indices[7] = packedIndices.w >> 16;
 	return fan;
 }
 

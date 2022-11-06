@@ -4,7 +4,7 @@
 #define MAX_PARTICLES_PER_CLOTH         2048
 #define PARTICLES_PER_THREAD            2
 #define MAX_CONSTRAINT_BATCHES          12
-#define MAX_FAN_BLADES_PER_PARTICLE     8
-#define INVALID_FAN_INDEX	            0xFFFF
+#define MAX_TRIS_PER_PARTICLE           6
+#define FILLED_FAN_BIT	                0x8000
 
 #endif // CLOTH_CONSTANTS_INCLUDED

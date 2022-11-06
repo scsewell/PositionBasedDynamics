@@ -2,7 +2,7 @@
 #define CLOTH_UNIFORMS_INCLUDED
 
 StructuredBuffer<float> _InverseMasses;
-RWStructuredBuffer<uint4> _NeighbourFanIndices;
+RWStructuredBuffer<uint3> _NeighbourFanIndices;
 StructuredBuffer<CompressedDistanceConstraint> _DistanceConstraints;
 
 RWStructuredBuffer<float4> _CurrentPositions;

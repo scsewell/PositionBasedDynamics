@@ -18,9 +18,9 @@ namespace Scsewell.PositionBasedDynamics
         public const int maxConstraintBatches = 12;
         
         /// <summary>
-        /// The maximum number of particles in the neighbourhood of a particle.
+        /// The maximum number of triangles in the neighbourhood of a particle.
         /// </summary>
-        public const int maxFanBladesPerParticle = 8;
+        public const int maxTrisPerParticle = 6;
 
         /// <summary>
         /// The number of particles processed per compute thread.
@@ -28,9 +28,9 @@ namespace Scsewell.PositionBasedDynamics
         internal const int particlesPerThread = 2;
         
         /// <summary>
-        /// The value used to represent an unused index in the neighbourhood of a particle.
+        /// The value used to represent a fan neighbourhood triangle.
         /// </summary>
-        internal const ushort invalidFanIndex = 0xFFFF;
+        internal const ushort FilledFanBit = 0x8000;
     }
 
     /// <summary>
@@ -50,7 +50,6 @@ namespace Scsewell.PositionBasedDynamics
             
             public static readonly int _CurrentPositions = Shader.PropertyToID("_CurrentPositions");
             public static readonly int _PreviousPositions = Shader.PropertyToID("_PreviousPositions");
-            public static readonly int _Normals = Shader.PropertyToID("_Normals");
             
             public static readonly int _MeshPositions = Shader.PropertyToID("_MeshPositions");
             public static readonly int _MeshNormals = Shader.PropertyToID("_MeshNormals");

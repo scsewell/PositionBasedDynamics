@@ -1,4 +1,6 @@
 ﻿using System;
+using System.Collections.Generic;
+using System.Text;
 
 using Unity.Collections;
 using Unity.Mathematics;
@@ -38,16 +40,15 @@ namespace Scsewell.PositionBasedDynamics
         
         // compute buffers
         GraphicsBuffer m_inverseMassesBuffer;
+        GraphicsBuffer m_neighbourhoodFansBuffer;
         GraphicsBuffer m_distanceConstraintsBuffer;
         GraphicsBuffer m_currentPositionsBuffer;
         GraphicsBuffer m_previousPositionsBuffer;
-        GraphicsBuffer m_normalsBuffer;
         
         // the mesh used for rendering
         Mesh m_mesh;
         GraphicsBuffer m_meshPositionBuffer;
         GraphicsBuffer m_meshNormalBuffer;
-        GraphicsBuffer m_meshIndexBuffer;
 
         DirtyFlags m_dirtyFlags = DirtyFlags.All;
         int m_particleCount;
@@ -117,16 +118,15 @@ namespace Scsewell.PositionBasedDynamics
 
             // dispose compute buffers
             DisposeUtils.DisposeSafe(ref m_inverseMassesBuffer);
+            DisposeUtils.DisposeSafe(ref m_neighbourhoodFansBuffer);
             DisposeUtils.DisposeSafe(ref m_distanceConstraintsBuffer);
             DisposeUtils.DisposeSafe(ref m_currentPositionsBuffer);
             DisposeUtils.DisposeSafe(ref m_previousPositionsBuffer);
-            DisposeUtils.DisposeSafe(ref m_normalsBuffer);
 
             // dispose mesh
             DisposeUtils.DestroySafe(ref m_mesh);
             DisposeUtils.DisposeSafe(ref m_meshPositionBuffer);
             DisposeUtils.DisposeSafe(ref m_meshNormalBuffer);
-            DisposeUtils.DisposeSafe(ref m_meshIndexBuffer);
             
             // clear managed state
             m_dirtyFlags = DirtyFlags.All;
@@ -189,7 +189,7 @@ namespace Scsewell.PositionBasedDynamics
             Graphics.DrawMesh(m_mesh, Cloth.Transform, Cloth.Material, 0);
         }
 
-        void UpdateBuffers()
+        unsafe void UpdateBuffers()
         {
             using var _ = new ProfilerScope($"{nameof(ClothState)}.{nameof(UpdateBuffers)}()");
 
@@ -198,14 +198,13 @@ namespace Scsewell.PositionBasedDynamics
 
             DisposeUtils.DisposeSafe(ref m_distanceConstraintsBuffer);
             DisposeUtils.DisposeSafe(ref m_inverseMassesBuffer);
+            DisposeUtils.DisposeSafe(ref m_neighbourhoodFansBuffer);
             DisposeUtils.DisposeSafe(ref m_currentPositionsBuffer);
             DisposeUtils.DisposeSafe(ref m_previousPositionsBuffer);
-            DisposeUtils.DisposeSafe(ref m_normalsBuffer);
         
             m_mesh.Clear();
             DisposeUtils.DisposeSafe(ref m_meshPositionBuffer);
             DisposeUtils.DisposeSafe(ref m_meshNormalBuffer);
-            DisposeUtils.DisposeSafe(ref m_meshIndexBuffer);
             
             // find the required buffer sizes
             m_particleCount = Mathf.Max(Cloth.ParticleCount, 0);
@@ -266,6 +265,14 @@ namespace Scsewell.PositionBasedDynamics
                 Allocator.Temp,
                 NativeArrayOptions.UninitializedMemory
             );
+            var neighbourhoodTris = new NativeMultiHashMap<int, (ushort, ushort)>(
+                m_particleCount * Constants.maxTrisPerParticle,
+                Allocator.Temp
+            );
+            var neighbourhoodFans = new NativeArray<ushort>(
+                m_particleCount * Constants.maxTrisPerParticle,
+                Allocator.Temp
+            );
             var restPositions = new NativeArray<float4>(
                 m_particleCount,
                 Allocator.Temp,
@@ -289,9 +296,26 @@ namespace Scsewell.PositionBasedDynamics
                 NativeArrayOptions.UninitializedMemory
             );
 
+            var neighbourhood = stackalloc (ushort, ushort)[Constants.maxTrisPerParticle];
+
             var clothParticles = Cloth.GetParticles();
             var clothIndices = Cloth.GetIndices();
             
+            for (var i = 0; i < m_indexCount; i++)
+            {
+                indices[i] = (ushort)clothIndices[i];
+            }
+            for (var i = 0; i < m_indexCount; i += 3)
+            {
+                var i0 = (ushort)clothIndices[i];
+                var i1 = (ushort)clothIndices[i + 1];
+                var i2 = (ushort)clothIndices[i + 2];
+                
+                neighbourhoodTris.Add(i0, (i1, i2));
+                neighbourhoodTris.Add(i1, (i2, i0));
+                neighbourhoodTris.Add(i2, (i0, i1));
+            }
+
             for (var i = 0; i < m_particleCount; i++)
             {
                 var particle = clothParticles[i];
@@ -299,20 +323,38 @@ namespace Scsewell.PositionBasedDynamics
                 inverseMasses[i] = particle.inverseMass;
                 restPositions[i] = new float4(particle.restPosition, 0f);
                 uvs[i] = particle.uv;
-            }
-            for (var i = 0; i < m_indexCount; i++)
-            {
-                indices[i] = (ushort)clothIndices[i];
+
+                var neighbourhoodSize = 0;
+                
+                foreach (var tri in neighbourhoodTris.GetValuesForKey(i))
+                {
+                    neighbourhood[neighbourhoodSize++] = tri;
+                }
+
+                SortNeighbourhood(neighbourhood, neighbourhoodSize);
+
+                var fanOffset = i * Constants.maxTrisPerParticle;
+
+                for (var j = 0; j < neighbourhoodSize; j++)
+                {
+                    neighbourhoodFans[fanOffset + j] = (ushort)(neighbourhood[j].Item1 | Constants.FilledFanBit);
+                }
+                if (neighbourhoodSize > 0 && neighbourhoodSize < Constants.maxTrisPerParticle)
+                {
+                    neighbourhoodFans[fanOffset + neighbourhoodSize] = neighbourhood[neighbourhoodSize - 1].Item2;
+                }
             }
             
+            neighbourhoodTris.Dispose();
+
             var staticProperties = new ClothStaticPropertyBuffer
             {
                 _ParticleCount = (uint)m_particleCount,
-                _TriangleCount = (uint)(m_indexCount / 3),
                 _ConstraintBatchCount = (uint)constraintBatchCount,
-                _ThreadGroupCount = (uint)threadGroupCount,
-                _BoundsMin = Cloth.Bounds.min,
-                _BoundsMax = Cloth.Bounds.max,
+                _WindVelocity = math.float3(1f),
+                _AirDensity = 1.225f,
+                _LiftCoefficient = 1.0f,
+                _DragCoefficient = 1.5f,
             };
             
             var currentConstraint = 0;
@@ -348,6 +390,15 @@ namespace Scsewell.PositionBasedDynamics
             {
                 name = $"{nameof(ClothState)}_{Cloth.Name}_InverseMasses",
             };
+            m_neighbourhoodFansBuffer = new GraphicsBuffer(
+                GraphicsBuffer.Target.Structured,
+                GraphicsBuffer.UsageFlags.None,
+                m_particleCount,
+                3 * sizeof(uint)
+            )
+            {
+                name = $"{nameof(ClothState)}_{Cloth.Name}_NeighbourhoodFans",
+            };
             m_currentPositionsBuffer = new GraphicsBuffer(
                 GraphicsBuffer.Target.Structured,
                 GraphicsBuffer.UsageFlags.None,
@@ -366,15 +417,6 @@ namespace Scsewell.PositionBasedDynamics
             {
                 name = $"{nameof(ClothState)}_{Cloth.Name}_PreviousPositions",
             };
-            m_normalsBuffer = new GraphicsBuffer(
-                GraphicsBuffer.Target.Structured,
-                GraphicsBuffer.UsageFlags.None,
-                m_particleCount,
-                4 * sizeof(float)
-            )
-            {
-                name = $"{nameof(ClothState)}_{Cloth.Name}_Normals",
-            };
             m_distanceConstraintsBuffer = new GraphicsBuffer(
                 GraphicsBuffer.Target.Structured,
                 GraphicsBuffer.UsageFlags.None,
@@ -386,11 +428,13 @@ namespace Scsewell.PositionBasedDynamics
             };
             
             m_inverseMassesBuffer.SetData(inverseMasses);
+            m_neighbourhoodFansBuffer.SetData(neighbourhoodFans);
             m_currentPositionsBuffer.SetData(restPositions);
             m_previousPositionsBuffer.SetData(restPositions);
             m_distanceConstraintsBuffer.SetData(distanceConstraints);
 
             inverseMasses.Dispose();
+            neighbourhoodFans.Dispose();
             restPositions.Dispose();
             distanceConstraints.Dispose();
             
@@ -414,9 +458,6 @@ namespace Scsewell.PositionBasedDynamics
             m_meshNormalBuffer = m_mesh.GetVertexBuffer(1);
             m_meshNormalBuffer.name = $"{nameof(ClothState)}_{Cloth.Name}_MeshNormals";
 
-            m_meshIndexBuffer = m_mesh.GetIndexBuffer();
-            m_meshIndexBuffer.name = $"{nameof(ClothState)}_{Cloth.Name}_MeshIndices";
-            
             m_mesh.SetVertexBufferData(uvs, 0, 0, m_particleCount, 2);
             m_mesh.SetIndexBufferData(indices, 0, 0, indices.Length, MeshUpdateFlags.DontValidateIndices);
             m_mesh.SetSubMesh(0, subMesh, MeshUpdateFlags.DontRecalculateBounds);
@@ -463,6 +504,12 @@ namespace Scsewell.PositionBasedDynamics
             m_cmdBuffer.SetComputeBufferParam(
                 ClothManager.s_clothShader,
                 ClothManager.s_clothKernel.kernelID,
+                Properties.Cloth._NeighbourFanIndices,
+                m_neighbourhoodFansBuffer
+            );
+            m_cmdBuffer.SetComputeBufferParam(
+                ClothManager.s_clothShader,
+                ClothManager.s_clothKernel.kernelID,
                 Properties.Cloth._CurrentPositions,
                 m_currentPositionsBuffer
             );
@@ -471,12 +518,6 @@ namespace Scsewell.PositionBasedDynamics
                 ClothManager.s_clothKernel.kernelID,
                 Properties.Cloth._PreviousPositions,
                 m_previousPositionsBuffer
-            );
-            m_cmdBuffer.SetComputeBufferParam(
-                ClothManager.s_clothShader,
-                ClothManager.s_clothKernel.kernelID,
-                Properties.Cloth._Normals,
-                m_normalsBuffer
             );
             m_cmdBuffer.SetComputeBufferParam(
                 ClothManager.s_clothShader,
@@ -490,18 +531,68 @@ namespace Scsewell.PositionBasedDynamics
                 Properties.Cloth._MeshNormals,
                 m_meshNormalBuffer
             );
-            m_cmdBuffer.SetComputeBufferParam(
-                ClothManager.s_clothShader,
-                ClothManager.s_clothKernel.kernelID,
-                Properties.Cloth._MeshIndices,
-                m_meshIndexBuffer
-            );
 
             m_cmdBuffer.DispatchCompute(
                 ClothManager.s_clothShader,
                 ClothManager.s_clothKernel.kernelID, 
                 threadGroupCount, 1, 1
             );
+        }
+
+        static unsafe void SortNeighbourhood((ushort, ushort)* neighbourhood, int count)
+        {
+            var start = 0;
+            var end = count;
+
+            while (start < end - 1)
+            {
+                var item = neighbourhood[start];
+                var swapIndex = start + 1;
+                var found = false;
+                
+                for (var i = swapIndex; i < end; i++)
+                {
+                    var current = neighbourhood[i];
+
+                    if (item.Item2 != current.Item1)
+                    {
+                        continue;
+                    }
+                    
+                    if (i != swapIndex)
+                    {
+                        (neighbourhood[swapIndex], neighbourhood[i]) = (neighbourhood[i], neighbourhood[swapIndex]);
+                    }
+                    
+                    found = true;
+                    break;
+                }
+                
+                if (found)
+                {
+                    start++;
+                    continue;
+                }
+                
+                var temp = stackalloc (ushort, ushort)[swapIndex];
+                var remaining = end - swapIndex;
+                
+                for (var i = 0; i < swapIndex; i++)
+                {
+                    temp[i] = neighbourhood[i];
+                }
+                for (var i = swapIndex; i < end; i++)
+                {
+                    neighbourhood[i - swapIndex] = neighbourhood[i];
+                }
+                for (var i = 0; i < swapIndex; i++)
+                {
+                    neighbourhood[remaining + i] = temp[i];
+                }
+
+                start = 0;
+                end = remaining;
+            }
         }
     }
 }
